@@ -7,31 +7,17 @@
 #pragma comment(lib, "winhttp.lib")
 
 std::wstring LLMClient::GenerateContent(const std::wstring& prompt, const LLMConfig& config) {
-    if (config.api_key.empty() || config.api_key == "INSERT_KEY_HERE") {
-        return L"Error: API Key not set in llm_config.txt";
-    }
-
-    if (config.provider == "gemini") {
-        return CallGemini(prompt, config);
-    } 
-    else if (config.provider == "openai") {
-        return L"Error: OpenAI support coming soon. (Check llm_config.txt provider)";
-    }
-    else if (config.provider == "grok") {
-        return L"Error: Grok support coming soon. (Check llm_config.txt provider)";
-    }
-
-    return L"Error: Unknown provider '" + Utf8ToWide(config.provider) + L"'";
-}
-
-std::wstring LLMClient::CallGemini(const std::wstring& prompt, const LLMConfig& config) {
-    std::wstring host = L"generativelanguage.googleapis.com";
-    std::wstring path = L"/v1beta/models/" + Utf8ToWide(config.model) + L":generateContent?key=" + Utf8ToWide(config.api_key);
+    // We now act as a dummy client forwarding to our local Python backend
+    // config.api_key and model are used by the backend, not here (passed via env vars)
     
+    std::wstring host = L"127.0.0.1";
+    std::wstring path = L"/chat";
+    int port = 8000; // Use config port if needed, hardcoded for now matching backend default
+
     std::string promptUtf8 = WideToUtf8(prompt);
-    std::string jsonBody = "{ \"contents\": [{ \"parts\": [{ \"text\": \"";
     
-    // Simple escape
+    // JSON Escape
+    std::string jsonBody = "{ \"text\": \"";
     for (char c : promptUtf8) {
         if (c == '\"') jsonBody += "\\\"";
         else if (c == '\\') jsonBody += "\\\\";
@@ -39,28 +25,27 @@ std::wstring LLMClient::CallGemini(const std::wstring& prompt, const LLMConfig& 
         else if (c == '\r') jsonBody += "\\r";
         else jsonBody += c;
     }
-    jsonBody += "\" }] }] }";
+    jsonBody += "\" }";
 
     std::wstring headers = L"Content-Type: application/json";
     
-    std::wstring responseJson = SendRequest(host, path, jsonBody, headers);
-    return ExtractTextFromJson(responseJson, "gemini");
+    std::wstring responseJson = SendRequest(host, path, jsonBody, headers, port);
+    return ExtractTextFromJson(responseJson);
 }
-// Future implementations for CallOpenAI, CallGrok would go here...
 
-std::wstring LLMClient::SendRequest(const std::wstring& host, const std::wstring& path, const std::string& jsonBody, const std::wstring& headers) {
+std::wstring LLMClient::SendRequest(const std::wstring& host, const std::wstring& path, const std::string& jsonBody, const std::wstring& headers, int port) {
     HINTERNET hSession = WinHttpOpen(L"AIOverlay/1.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"Error: WinHttpOpen failed";
 
-    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), port, 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
-        return L"Error: WinHttpConnect failed";
+        return L"Error: WinHttpConnect failed (Is backend running?)";
     }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(),
-        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0); // Removed Secure flag for localhost
     if (!hRequest) {
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -95,7 +80,7 @@ std::wstring LLMClient::SendRequest(const std::wstring& host, const std::wstring
         } while (dwSize > 0);
     }
     else {
-        responseData = "Error: Network request failed";
+        responseData = "Error: Backend request failed";
     }
 
     WinHttpCloseHandle(hRequest);
@@ -105,17 +90,15 @@ std::wstring LLMClient::SendRequest(const std::wstring& host, const std::wstring
     return Utf8ToWide(responseData);
 }
 
-std::wstring LLMClient::ExtractTextFromJson(const std::wstring& json, const std::string& provider) {
-    // Simple parser for now, mainly targeted at Gemini's structure
-    // { "candidates": [ { "content": { "parts": [ { "text": "THE ANSWER" } ] } } ] }
+std::wstring LLMClient::ExtractTextFromJson(const std::wstring& json) {
+    // Simple parser for extracting "reply" field
+    // response format: { "reply": "AI response" }
     
-    std::wstring key = L"\"text\": \"";
+    std::wstring key = L"\"reply\": \"";
     size_t pos = json.find(key);
     if (pos == std::wstring::npos) {
-        if (json.find(L"\"error\":") != std::wstring::npos) {
-            return L"API Error: Check config or key.";
-        }
-        return L"Error parsing response";
+        // Fallback or error check
+        return json; // Return raw if parsing fails (might be plain error string)
     }
 
     pos += key.length();
@@ -130,37 +113,19 @@ std::wstring LLMClient::ExtractTextFromJson(const std::wstring& json, const std:
             else if (c == 't') result += L'\t';
             else if (c == '\"') result += L'\"';
             else if (c == '\\') result += L'\\';
-            else if (c == '/') result += L'/'; // Solidus
-            else if (c == 'u') {
-                // Unicode escape \uXXXX
-                if (i + 4 < json.length()) {
-                    std::wstring hexCode = json.substr(i + 1, 4);
-                    try {
-                        int code = std::stoi(hexCode, nullptr, 16);
-                        result += static_cast<wchar_t>(code);
-                        i += 4;
-                    } catch (...) {
-                        // Fallback if parsing fails
-                        result += L"\\u";
-                        result += hexCode;
-                        i += 4; 
-                    }
-                } else {
-                     result += L"\\u";
-                }
+            // Simple unicode support same as before
+            else if (c == 'u' && i + 4 < json.length()) {
+                 try {
+                     result += static_cast<wchar_t>(std::stoi(json.substr(i+1, 4), nullptr, 16));
+                     i+=4;
+                 } catch(...) { result += L"\\u"; }
             }
-            else {
-                result += c; 
-            }
+            else result += c;
             escape = false;
         } else {
-            if (c == L'\\') {
-                escape = true;
-            } else if (c == L'\"') {
-                break; 
-            } else {
-                result += c;
-            }
+            if (c == L'\\') escape = true;
+            else if (c == L'\"') break;
+            else result += c;
         }
     }
 

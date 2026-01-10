@@ -1,37 +1,41 @@
-# Invisible AI Overlay
+# Invisible AI Overlay (Memory Enabled)
 
-The **Invisible AI Overlay** is a lightweight, undetectable Windows application that brings the power of Large Language Models (LLM) like Gemini and GPT directly to your screen without interrupting your workflow.
+The **Invisible AI Overlay** is a lightweight, undetectable Windows application that brings the power of Linked Language Models (LLM) directly to your screen.
 
-Designed for privacy and stealth, this overlay uses Windows native APIs to remain **invisible to screen capture software** (OBS, Discord, Snipping Tool, TeamViewer, etc.), making it perfect for private assistance during meetings, interviews, or presentations.
+**New in v2.0:** Now features a **Local Python Backend** that gives the AI **Conversation Memory**! The AI remembers what you said previously in the session, allowing for real back-and-forth discussions.
+
+## Architecture
+
+The application consists of two components that run together:
+1.  **`overlay.exe`** (Frontend): The invisible C++ window that handles drawing, hotkeys, and user input.
+2.  **`ai_backend.exe`** (Backend): A hidden Python process that manages the AI logic and maintains conversation history.
+
+*Note: You only need to launch `overlay.exe`. It automatically manages the backend for you.*
 
 ## Features
 
--   **👻 Completely Invisible to Screen Capture**: Uses `SetWindowDisplayAffinity` to exclude the window from all capture methods.
--   **🖱️ Click-Through & Transparent**: Interactions pass through to windows behind it until you activate it.
--   **🤖 Multi-Model Support**: Defaults to **Gemini 2.5 Flash Lite** (Fast & Free) with support for Pro and GPT models.
--   **🛠️ Interactive Setup**: First-run configuration dialog to select your model and enter your API key.
--   **🚀 Standalone Executable**: No external files required. Just run `overlay.exe` anywhere.
--   **⚡ Fast Chat**: Copy text + Hotkey to instantly send context to the AI.
+-   **🧠 Conversation Memory**: The AI remembers context from previous messages in the current session.
+-   **👻 Completely Invisible**: Uses `SetWindowDisplayAffinity` to exclude the window from screen capture (OBS, Discord, etc.).
+-   **🖱️ Click-Through**: Interact with windows behind the overlay seamlessly.
+-   **🤖 Multi-Model Support**: Defaults to **Gemini** (fast & free) with OpenAI support structure.
+-   **🚀 Standalone**: Zero-setup distribution. Everything is bundled into one executable package.
 
 ---
 
 ## Installation
 
-1.  Download `overlay.exe` from the [Releases Page](https://github.com/Zer0skillman/Interview-Hack).
-2.  Place it in any folder you like.
-3.  Run `overlay.exe`.
+1.  Download the **release zip**.
+2.  Extract the `project_app` folder.
+3.  Run `overlay.exe` inside it.
 
-*Note: You may need to whitelist the application in your antivirus as custom overlays can sometimes be flagged.*
+*Do not separate `overlay.exe` from `ai_backend.exe`. They must be in the same folder.*
 
-## First Time Setup
+## Setup
 
-1.  On first launch, a **Configuration Dialog** will appear.
-2.  **Select Model**: Choose your preferred model (e.g., Gemini 2.5 Flash Lite).
-3.  **Enter API Key**: Paste your Google AI Studio or OpenAI API key.
+1.  On first run, you will be asked for your **API Key**.
     -   [Get a Free Gemini API Key here](https://aistudio.google.com/app/apikey)
-4.  Click **Start Overlay**.
-
-Your settings are saved to `llm_config.txt` in the same folder. To change them later, just edit that file or delete it to trigger the setup dialog again.
+2.  Select your model and click Start.
+3.  The overlay will appear (invisible to others, visible to you).
 
 ---
 
@@ -39,44 +43,35 @@ Your settings are saved to `llm_config.txt` in the same folder. To change them l
 
 | Hotkey | Action |
 | :--- | :--- |
-| **INS** (Insert) | **Send to AI**: Copies your current selection (or clipboard) and sends it to the AI. |
-| **DEL** (Delete) | **Toggle Visibility**: Hides or Shows the overlay instantly. |
-| **Page Up** | Scroll Chat History **Up**. |
-| **Page Down** | Scroll Chat History **Down**. |
-| **END** | **Exit** the application completely. |
+| **INS** (Insert) | **Send to AI**: Copies selected text and sends it to the AI. |
+| **DEL** (Delete) | **Toggle Visibility**: Hides or Shows the overlay. |
+| **Page Up/Down** | Scroll Chat History. |
+| **END** | **Exit** the application (closes both frontend and backend). |
 
-### How to Chat
-1.  **Select text** anywhere on your screen (browser, IDE, PDF, etc.).
-2.  Press **Ctrl+C** to copy (or just Highlight if you have clipboard history enabled).
-3.  Press **INS**.
-4.  The overlay will display "Thinking..." and stream the answer in real-time.
+### Memory Behavior
+-   **Session Based**: The AI remembers everything you discuss while the app is open.
+-   **Reset**: When you close the app (`END` key) or restart it, the memory is wiped for privacy.
 
 ---
 
-## Build Instructions (For Developers)
+## Build Instructions (Developers)
 
-If you want to modify the code or build from source:
+This project uses a **Master Build Script** to compile both the C++ Frontend and Python Backend.
 
-### Requirements
--   MinGW-w64 (g++) OR Visual Studio Build Tools.
--   Windows SDK.
+**Requirements:**
+1.  **Python 3.10+** (Added to PATH)
+2.  **MinGW-w64** (g++) (Added to PATH)
 
-### Compilation Command (MinGW)
+**How to Build:**
+Open PowerShell in the project root and run:
 ```powershell
-g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp -o overlay.exe -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32
+.\build_release.ps1
 ```
 
-### File Structure
--   `main.cpp`: Entry point.
--   `OverLayWindow.cpp`: Core window logic & rendering.
--   `LLMClient.cpp`: HTTP client for Gemini/OpenAI APIs.
--   `ConfigDialog.cpp`: Initial setup UI.
--   `models_list.txt`: (Optional) External model list.
-
-## Limitations
-
--   **Memoryless (Stateless)**: Each request is independent. The AI **does not remember** your previous questions or context. You must provide all necessary context in the text you select/copy for each query.
--   **Context Limit**: There is a limit to how much text you can send at once (depending on the model). Very long documents might need to be split.
+This will:
+1.  Install Python dependencies and build `ai_backend.exe` (using PyInstaller).
+2.  Compile `overlay.exe` (using g++).
+3.  Package everything into a ready-to-ship `project_app` folder.
 
 ## License
 MIT License
