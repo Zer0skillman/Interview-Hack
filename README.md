@@ -1,67 +1,77 @@
-# Invisible Overlay Application
+# Invisible AI Overlay
 
-This application creates a top-most, transparent overlay that displays "HELLO" in green text. 
-It uses the `SetWindowDisplayAffinity` API with `WDA_EXCLUDEFROMCAPTURE` to remain invisible to screen capture software like OBS, Discord, and Snipping Tool.
+The **Invisible AI Overlay** is a lightweight, undetectable Windows application that brings the power of Large Language Models (LLM) like Gemini and GPT directly to your screen without interrupting your workflow.
 
-## Prerequisites
+Designed for privacy and stealth, this overlay uses Windows native APIs to remain **invisible to screen capture software** (OBS, Discord, Snipping Tool, TeamViewer, etc.), making it perfect for private assistance during meetings, interviews, or presentations.
 
-You need a C++ compiler. 
-We attempted to install **MSYS2** automatically.
-Once the installation finishes (you might see a terminal window):
-1. Open **MSYS2 MINGW64** from your Start Menu.
-2. Run this command to install GCC:
-   ```bash
-   pacman -S mingw-w64-x86_64-gcc
-   ```
-3. Add `C:\msys64\mingw64\bin` to your System PATH to use `g++` everywhere.
+## Features
 
-To check if you have it:
+-   **👻 Completely Invisible to Screen Capture**: Uses `SetWindowDisplayAffinity` to exclude the window from all capture methods.
+-   **🖱️ Click-Through & Transparent**: Interactions pass through to windows behind it until you activate it.
+-   **🤖 Multi-Model Support**: Defaults to **Gemini 2.5 Flash Lite** (Fast & Free) with support for Pro and GPT models.
+-   **🛠️ Interactive Setup**: First-run configuration dialog to select your model and enter your API key.
+-   **🚀 Standalone Executable**: No external files required. Just run `overlay.exe` anywhere.
+-   **⚡ Fast Chat**: Copy text + Hotkey to instantly send context to the AI.
+
+---
+
+## Installation
+
+1.  Download `overlay.exe` from the [Releases Page](https://github.com/Zer0skillman/Interview-Hack).
+2.  Place it in any folder you like.
+3.  Run `overlay.exe`.
+
+*Note: You may need to whitelist the application in your antivirus as custom overlays can sometimes be flagged.*
+
+## First Time Setup
+
+1.  On first launch, a **Configuration Dialog** will appear.
+2.  **Select Model**: Choose your preferred model (e.g., Gemini 2.5 Flash Lite).
+3.  **Enter API Key**: Paste your Google AI Studio or OpenAI API key.
+    -   [Get a Free Gemini API Key here](https://aistudio.google.com/app/apikey)
+4.  Click **Start Overlay**.
+
+Your settings are saved to `llm_config.txt` in the same folder. To change them later, just edit that file or delete it to trigger the setup dialog again.
+
+---
+
+## Controls & Usage
+
+| Hotkey | Action |
+| :--- | :--- |
+| **INS** (Insert) | **Send to AI**: Copies your current selection (or clipboard) and sends it to the AI. |
+| **DEL** (Delete) | **Toggle Visibility**: Hides or Shows the overlay instantly. |
+| **Page Up** | Scroll Chat History **Up**. |
+| **Page Down** | Scroll Chat History **Down**. |
+| **END** | **Exit** the application completely. |
+
+### How to Chat
+1.  **Select text** anywhere on your screen (browser, IDE, PDF, etc.).
+2.  Press **Ctrl+C** to copy (or just Highlight if you have clipboard history enabled).
+3.  Press **INS**.
+4.  The overlay will display "Thinking..." and stream the answer in real-time.
+
+---
+
+## Build Instructions (For Developers)
+
+If you want to modify the code or build from source:
+
+### Requirements
+-   MinGW-w64 (g++) OR Visual Studio Build Tools.
+-   Windows SDK.
+
+### Compilation Command (MinGW)
 ```powershell
-g++ --version
+g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp -o overlay.exe -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32
 ```
 
-If you prefer **Visual Studio Build Tools** (MSVC):
-```powershell
-winget install Microsoft.VisualStudio.2022.BuildTools --force --accept-package-agreements
-```
-*Note: This is a large installation.*
+### File Structure
+-   `main.cpp`: Entry point.
+-   `OverLayWindow.cpp`: Core window logic & rendering.
+-   `LLMClient.cpp`: HTTP client for Gemini/OpenAI APIs.
+-   `ConfigDialog.cpp`: Initial setup UI.
+-   `models_list.txt`: (Optional) External model list.
 
-## Build Instructions
-
-### Option 1: MinGW (g++) - Recommended for speed
-Run this command in the terminal (this temporarily sets the path for you):
-```powershell
-$env:Path = "C:\msys64\mingw64\bin;" + $env:Path; g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp -o overlay.exe -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32
-```
-- `-lwinhttp`: Links the Windows HTTP library for networking.
-
-### Option 2: Visual Studio (cl.exe)
-Open the "Developer Command Prompt for VS 2022" and run:
-```cmd
-cl main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp User32.lib Gdi32.lib Winhttp.lib /link /SUBSYSTEM:WINDOWS
-```
-
-## Running
-1. **Configure API Key**: Open `llm_config.txt`.
-   ```ini
-   provider=gemini
-   model=gemini-2.5-flash-lite
-   api_key=INSERT_OR_CHANGE_KEY_HERE
-   ```
-   *Future support for `provider=openai` is built-in structure.*
-2. Run `overlay.exe`.
-
-## Controls
-- **INS**: Copy selected text to clipboard and press **INS** to chat.
-- **DEL**: Toggle Overlay Visibility (Hide/Show).
-- **Page Up**: Scroll Chat History Up.
-- **Page Down**: Scroll Chat History Down.
-- **END**: Close the application.
-
-## How to Use "Chat"
-1. Copy any text to your clipboard (Ctrl+C).
-2. Press the **INS** key on your keyboard.
-3. The overlay will show "Thinking..." and then stream the AI response.
-
-## Privacy Note
-This application uses trusted Windows APIs (`SetWindowDisplayAffinity`). It does not inject code or modify other processes. It simply tells Windows "don't include this window in screen captures".
+## License
+MIT License
