@@ -1,2 +1,16 @@
 llm_config.txt
 /cache
+
+# Build Artifacts
+project_app/
+/dist
+/build
+*.spec
+__pycache__/
+
+# Python
+venv/
+python_backend/venv/
+python_backend/dist/
+python_backend/build/
+*.pyc
