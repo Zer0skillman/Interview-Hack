@@ -14,3 +14,4 @@ python_backend/venv/
 python_backend/dist/
 python_backend/build/
 *.pyc
+
