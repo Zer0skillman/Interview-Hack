@@ -73,5 +73,10 @@ g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp -
 -   `ConfigDialog.cpp`: Initial setup UI.
 -   `models_list.txt`: (Optional) External model list.
 
+## Limitations
+
+-   **Memoryless (Stateless)**: Each request is independent. The AI **does not remember** your previous questions or context. You must provide all necessary context in the text you select/copy for each query.
+-   **Context Limit**: There is a limit to how much text you can send at once (depending on the model). Very long documents might need to be split.
+
 ## License
 MIT License
