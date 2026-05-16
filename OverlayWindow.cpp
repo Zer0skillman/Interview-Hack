@@ -1,5 +1,6 @@
 #include "OverlayWindow.h"
 #include "ConfigDialog.h"
+#include "LLMClient.h"
 #include <algorithm> // for std::max
 #include <objidl.h>
 #include <gdiplus.h>
@@ -408,27 +409,70 @@ LRESULT CALLBACK OverlayWindow::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, 
                 RECT r = pThis->m_bubbleBounds[i];
                 if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) {
                     std::wstring text = pThis->m_messages[i].text;
+                    bool isUser = pThis->m_messages[i].isUser;
                     // Strip "[tag] " prefix on user bubbles
-                    if (pThis->m_messages[i].isUser && !text.empty() && text[0] == L'[') {
+                    if (isUser && !text.empty() && text[0] == L'[') {
                         size_t close = text.find(L"] ");
                         if (close != std::wstring::npos) text = text.substr(close + 2);
                     }
-                    if (!text.empty() && OpenClipboard(pThis->m_hwnd)) {
-                        EmptyClipboard();
-                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                        if (hMem) {
-                            void* dst = GlobalLock(hMem);
-                            if (dst) {
-                                memcpy(dst, text.c_str(), bytes);
-                                GlobalUnlock(hMem);
-                                SetClipboardData(CF_UNICODETEXT, hMem);
+
+                    if (isUser) {
+                        // User bubble: open edit dialog. On Resend: drop this and all
+                        // subsequent messages, then dispatch as a fresh INS-style send.
+                        pThis->ToggleSelectMode();  // exit select first so dialog gets focus
+                        std::wstring edited;
+                        if (ShowEditDialog(pThis->m_hInstance, pThis->m_hwnd, text, edited) && !edited.empty()) {
+                            // Truncate history to just before this user bubble
+                            pThis->m_messages.resize(i);
+
+                            // Now push the edited user msg + thinking placeholder and fire
+                            ChatMessage u; u.text = edited; u.isUser = true;
+                            pThis->m_messages.push_back(u);
+                            ChatMessage b; b.text = L"Thinking..."; b.isUser = false;
+                            pThis->m_messages.push_back(b);
+                            pThis->TrimHistory();
+                            pThis->m_wasAtBottom = true;
+                            pThis->m_scrollOffset = kScrollToBottom;
+                            pThis->m_inflightCalls++;
+
+                            std::vector<LLMTurn> history;
+                            if (pThis->m_messages.size() >= 2) {
+                                history.reserve(pThis->m_messages.size() - 2);
+                                for (size_t j = 0; j + 2 < pThis->m_messages.size(); ++j) {
+                                    history.push_back({ pThis->m_messages[j].isUser, pThis->m_messages[j].text });
+                                }
                             }
+                            LLMConfig cfg = pThis->m_config;
+                            HWND hwnd = pThis->m_hwnd;
+                            std::wstring q = edited;
+                            std::thread([hwnd, q, history, cfg]() {
+                                LLMClient::GenerateContentStreaming(q, history, cfg,
+                                    std::string(), std::string(),
+                                    [hwnd](const std::wstring& chunk, bool isFinal) {
+                                        std::wstring* heap = new std::wstring(chunk);
+                                        PostMessage(hwnd, WM_LLM_CHUNK, isFinal ? 1 : 0, (LPARAM)heap);
+                                    });
+                            }).detach();
                         }
-                        CloseClipboard();
+                    } else {
+                        // Bot bubble: copy to clipboard (existing behavior)
+                        if (!text.empty() && OpenClipboard(pThis->m_hwnd)) {
+                            EmptyClipboard();
+                            size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+                            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                            if (hMem) {
+                                void* dst = GlobalLock(hMem);
+                                if (dst) {
+                                    memcpy(dst, text.c_str(), bytes);
+                                    GlobalUnlock(hMem);
+                                    SetClipboardData(CF_UNICODETEXT, hMem);
+                                }
+                            }
+                            CloseClipboard();
+                        }
+                        pThis->m_lastTranscript = L"Copied to clipboard";
+                        pThis->ToggleSelectMode();
                     }
-                    pThis->m_lastTranscript = L"Copied to clipboard";
-                    pThis->ToggleSelectMode();  // exit
                     break;
                 }
             }
@@ -553,7 +597,6 @@ void OverlayWindow::Scroll(int delta)
     InvalidateRect(m_hwnd, NULL, TRUE);
 }
 
-#include "LLMClient.h"
 #include <thread>
 
 void OverlayWindow::UpdateFromClipboard()
@@ -1485,18 +1528,8 @@ std::string OverlayWindow::CaptureScreenshotAsBase64Png()
     return base64;
 }
 
-// Split a message into alternating prose / code segments using ``` fences.
-// During streaming an unmatched opening fence is fine — everything after it is
-// treated as a code segment until more text arrives.
-struct PaintSeg {
-    std::wstring text;
-    bool isCode;
-    std::wstring language;  // code-fence language label (e.g. "python"); empty if none
-};
-
-// Per-character colors for bracket pair colorization (rainbow brackets).
-// Matched (), [], {} pairs share a color; nesting cycles through the palette.
-// Unmatched closers go red. Non-bracket chars get the default code color.
+// Rendering moved to Overlay_Rendering.cpp.
+#if 0  // start of moved-out rendering block
 static const COLORREF kDefaultCodeColor   = RGB(220, 220, 220);
 static const COLORREF kUnmatchedColor     = RGB(255,  80,  80);
 static const COLORREF kBracketPalette[] = {
@@ -2372,3 +2405,4 @@ void OverlayWindow::OnPaint(HWND hwnd)
 
     EndPaint(hwnd, &ps);
 }
+#endif  // end of moved-out rendering block
