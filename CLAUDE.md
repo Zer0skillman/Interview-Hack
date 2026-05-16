@@ -11,7 +11,7 @@ clipboard text; sends to an LLM (Gemini/Claude/GPT-4o/Groq/etc.); streams the
 answer into a chat overlay that's hidden from screen capture
 (`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`).
 
-Current version: **2.5.0** (or whatever's in `app.rc`). Repo:
+Current version: **2.5.1** (or whatever's in `app.rc`). Repo:
 <https://github.com/Zer0skillman/Interview-Hack>. **macOS port is live**
 (phase 2 landed) — both Windows and macOS build from this repo.
 

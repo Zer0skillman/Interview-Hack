@@ -431,7 +431,7 @@ bool MacOverlayWindow::Initialize() {
         if (!m_impl->config.update_check_url.empty()) {
             Updater::CheckAndDownloadAsync(
                 m_impl->config.update_check_url,
-                L"2.5.0",
+                L"2.5.1",
                 [this](const Updater::Status& st) {
                     if (st.state == Updater::State::UpdateAvailable) {
                         NSString* s = [NSString stringWithUTF8String:
@@ -700,7 +700,7 @@ void MacOverlayWindow::ShowAbout() {
         NSAlert* a = [[NSAlert alloc] init];
         [a setMessageText:@"Invisible AI Overlay"];
         [a setInformativeText:
-            @"Version 2.5.0 (macOS)\n\n"
+            @"Version 2.5.1 (macOS)\n\n"
             @"Live interview & study copilot. Captures meeting audio + "
             @"screen + clipboard text, sends to your chosen LLM, streams "
             @"the answer here. Invisible to screen recording.\n\n"

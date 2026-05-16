@@ -31,7 +31,7 @@ static void CrashHandler(int sig) {
     std::filesystem::create_directory("logs", ec);
     FILE* f = std::fopen("logs/crash.txt", "wb");
     if (f) {
-        std::fprintf(f, "Crash: signal %d\nVersion: 2.5.0 (macOS)\n", sig);
+        std::fprintf(f, "Crash: signal %d\nVersion: 2.5.1 (macOS)\n", sig);
         std::fclose(f);
     }
     std::signal(sig, SIG_DFL);
@@ -48,7 +48,7 @@ int main(int argc, const char* argv[]) {
     std::signal(SIGFPE,  CrashHandler);
     std::signal(SIGILL,  CrashHandler);
 
-    Logger::Info("startup v2.5.0 (macOS)");
+    Logger::Info("startup v2.5.1 (macOS)");
     Updater::CleanupAfterRestart();  // no-op on Mac, here for symmetry
 
     @autoreleasepool {

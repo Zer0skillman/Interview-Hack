@@ -2,7 +2,7 @@
 
 **A live interview & study copilot for Windows and macOS.** Captures system audio, screenshots, and clipboard text, sends them to an LLM, and streams answers into an overlay that's hidden from screen capture (Zoom / Meet / Discord / OBS / Teams).
 
-Current version: **2.5.0**. Single executable on each platform — Win32 `.exe` (~4 MB) or macOS `.app` bundle (~330 KB binary, frameworks dynamically linked). No installer, no Python, no runtime.
+Current version: **2.5.1**. Single executable on each platform — Win32 `.exe` (~4 MB) or macOS `.app` bundle (~330 KB binary, frameworks dynamically linked). No installer, no Python, no runtime.
 
 > _Screenshots / demo GIF go here — see `docs/screenshots/` if/when added._
 
@@ -36,7 +36,7 @@ The overlay window is invisible to screen capture:
 
 ### Windows
 
-1. Download `Interview-Hack-v2.5.0-windows.zip` from the [latest release](https://github.com/Zer0skillman/Interview-Hack/releases/latest)
+1. Download `Interview-Hack-v2.5.1-windows.zip` from the [latest release](https://github.com/Zer0skillman/Interview-Hack/releases/latest)
 2. Extract anywhere
 3. Run `overlay.exe`
 
@@ -46,7 +46,7 @@ No installation, no dependencies, no registry writes. Settings live in `llm_conf
 
 Requires **macOS 14 (Sonoma) or later** — the app uses `SCScreenshotManager` from ScreenCaptureKit, which is 14+.
 
-1. Download `Interview-Hack-v2.5.0-macos.zip` from the [latest release](https://github.com/Zer0skillman/Interview-Hack/releases/latest)
+1. Download `Interview-Hack-v2.5.1-macos.zip` from the [latest release](https://github.com/Zer0skillman/Interview-Hack/releases/latest)
 2. Unzip and drag `overlay.app` into `/Applications` (or anywhere you like)
 3. The app is **not code-signed** yet, so on first launch macOS will say "developer cannot be verified." Either right-click `overlay.app` → **Open**, or run once from Terminal:
    ```bash

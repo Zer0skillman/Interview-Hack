@@ -100,6 +100,18 @@ jobs:
           test -f build-cmake/tests
           ./build-cmake/tests
 
+      - name: Ad-hoc codesign the .app
+        # The free fallback to Apple Developer ID signing. Removes the
+        # "damaged and can't be opened" Gatekeeper error on first launch by
+        # making the bundle at least *something*-signed. Users still see the
+        # gentler "developer cannot be verified" prompt and can right-click →
+        # Open the first time. Cost: zero. Benefit: ~99% of users don't need
+        # to run `xattr -dr com.apple.quarantine` to launch the app.
+        run: |
+          codesign --force --deep --sign - build-cmake/overlay.app
+          codesign --verify --deep --strict --verbose=2 build-cmake/overlay.app
+          codesign --display --verbose=2 build-cmake/overlay.app 2>&1 | head -10
+
       - name: Stage .app bundle for artifact
         run: |
           mkdir -p mac_app
