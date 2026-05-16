@@ -45,6 +45,7 @@ set(COMMON_HEADERS
     Updater.h
     Parsers.h
     IAudioCapture.h
+    IScreenshot.h
 )
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ if(WIN32)
         Overlay_Rendering.cpp
         ConfigDialog.cpp
         AudioCapture.cpp
+        Screenshot_Win.cpp
     )
 
     # Compile the Win32 resource (icon + manifest + version info)

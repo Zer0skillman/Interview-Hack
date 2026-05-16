@@ -5,6 +5,7 @@
 #include <atomic>
 #include "ConfigLoader.h"
 #include "IAudioCapture.h"
+#include "IScreenshot.h"
 #include <memory>
 
 // Custom message for when a full (non-streaming) LLM response is ready
@@ -84,14 +85,14 @@ private:
     void Scroll(int delta);
     void ToggleVisibility();
 
-    // Returns base64-encoded PNG of the monitor under the cursor, or empty on failure.
-    std::string CaptureScreenshotAsBase64Png();
+    // Screenshot capture lives in Screenshot_Win.cpp behind IScreenshot.
 
     HWND m_hwnd;
     HINSTANCE m_hInstance;
     std::vector<ChatMessage> m_messages;
     LLMConfig m_config;
     std::unique_ptr<IAudioCapture> m_audio;
+    std::unique_ptr<IScreenshot>   m_screenshot;
 
     // Scrolling
     int m_scrollOffset;

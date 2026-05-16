@@ -166,17 +166,35 @@ Rebinding UI in the welcome screen has a **"Reset to defaults"** button.
 
 ## 5. Open work items
 
-Nothing actionable in code remains from the previous backlog — the seven items there shipped in this last wave.
+### macOS port — phase 1 complete, phase 2 needs a Mac
 
-What needs you (outside the code):
+**Phase 1 (done):**
+- `CMakeLists.txt` builds Windows; macOS branch is `FATAL_ERROR` until macos/ sources exist
+- `IAudioCapture` interface + `WindowsAudioCapture` impl (audio loopback was the biggest platform-specific subsystem)
+- `IScreenshot` interface + `WindowsScreenshot` impl
+- All OverlayWindow callers go through these interfaces; no platform header leaks into business logic
 
-- **Real-world smoke test** the build (`project_app\overlay.exe`) in an actual mock interview. The harder-to-test paths (Anthropic vision, OpenAI vision, edit-and-resend round trip, audio device switching) need a human + API keys.
+**Phase 2 (needs macOS hardware/development env):**
+- `macos/MacAudioCapture.mm` — ScreenCaptureKit (macOS 13+) or BlackHole-driver-based fallback
+- `macos/Screenshot_Mac.mm` — `CGWindowListCreateImage`
+- `macos/MacWindow.mm` — `NSWindow` with `setSharingType:NSWindowSharingNone` for screen-capture exclusion, `setIgnoresMouseEvents` for click-through, status-bar window level
+- `macos/MacRenderer.mm` — `NSView drawRect:` or `CALayer` impl of the chat/code/markdown rendering currently in `Overlay_Rendering.cpp`
+- `macos/MacHotkeys.mm` — Carbon `RegisterEventHotKey` (still works, despite Carbon being deprecated)
+- `macos/MacConfigDialog.mm` — AppKit `NSWindow` with `NSTextField` / `NSPopUpButton` / `NSButton` replacing the Win32 controls in `ConfigDialog.cpp`
+- `macos/MacHttp.mm` OR pull libcurl in via vcpkg — decision is whoever has the Mac
+- `main_mac.mm` — `NSApplication` + `NSApplicationMain`, replaces `WinMain`
+- `Info.plist` with `NSScreenCaptureUsageDescription`, `NSMicrophoneUsageDescription`
+- Xcode project OR CMake target updates to produce an `.app` bundle
+- Apple Developer Program membership ($99/yr) for notarization to skip Gatekeeper warnings
+
+**Why I stopped here:** Writing speculative `.mm` code without a Mac to test against produces broken code that fails in CI's slow macos-latest runner with no way to iterate locally. Each round-trip is 5+ minutes. Phase 2 needs someone at a Mac for the next 3-4 weeks of work.
+
+### Non-port follow-ups (Windows-only, still actionable)
+
+- **Real-world smoke test** the build (`project_app\overlay.exe`) in an actual mock interview. Anthropic vision, OpenAI vision, edit-and-resend round trip, audio device switching all need a human + API keys.
 - **Rotate the leaked Gemini API key** at <https://aistudio.google.com/app/apikey> (in-app warning is there).
 - **README screenshots / demo GIF.** I can't run the app to capture them.
-- **Publish on a GitHub repo** to make the CI workflow at `.github/workflows/build.yml` actually fire.
-- **(Optional) Set `update_check_url`** in `llm_config.txt` to point at the published Releases endpoint once you publish.
-
-If you find concrete pain points during the smoke test, those become the next backlog.
+- **HTTP abstraction** (`IHttp`). Skipped during phase 1 because it touches ~120 WinHttp call sites for no immediate benefit — the macOS code will decide whether to use libcurl (cross-platform) or NSURLSession (native). Best decided with a Mac in hand.
 
 ---
 

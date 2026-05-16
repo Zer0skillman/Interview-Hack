@@ -67,6 +67,23 @@ There is no automated test suite (on the LOW roadmap). Smoke test by:
 - If your change adds a config field, update both `ConfigLoader::LoadConfig` and `SaveConfig`.
 - If your change adds a hotkey, prefer a new `HotkeyAction` enum value (rebindable) over a fixed ID.
 
+## macOS port (in progress)
+
+Phase 1 of the port shipped the cross-platform scaffolding:
+
+- `CMakeLists.txt` for cross-platform builds
+- Platform-agnostic interfaces: `IAudioCapture` (in `IAudioCapture.h`), `IScreenshot` (in `IScreenshot.h`)
+- Windows impls in `AudioCapture.cpp` / `Screenshot_Win.cpp`
+- Factories (`CreateAudioCapture()`, `CreateScreenshot()`) so `OverlayWindow` never sees platform headers
+
+Phase 2 is the actual Cocoa code. To pick it up you need:
+- A Mac (Apple Silicon or Intel, macOS 13+ preferred for ScreenCaptureKit)
+- Xcode 15+ installed (gets you `clang`, `objc++`, the AppKit/CoreAudio SDKs)
+- An Apple Developer account ($99/yr) when you're ready to sign + notarize
+- Familiarity with at least one of: AppKit, Carbon Events, ScreenCaptureKit
+
+The CMake `if(APPLE)` branch currently `FATAL_ERROR`s on purpose. When you add `macos/MacAudioCapture.mm` etc., flip that branch to actually build the .mm files and produce an .app bundle. See ROADMAP.md section 5 for the file checklist.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
