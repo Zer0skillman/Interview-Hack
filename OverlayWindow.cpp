@@ -1,6 +1,7 @@
 #include "OverlayWindow.h"
 #include "ConfigDialog.h"
 #include "LLMClient.h"
+#include "Updater.h"
 #include <algorithm> // for std::max
 #include <objidl.h>
 #include <gdiplus.h>
@@ -143,7 +144,7 @@ OverlayWindow::~OverlayWindow()
         }
         KillTimer(m_hwnd, 100);
         for (int id = 1; id <= (int)HotkeyAction::Count; ++id) UnregisterHotKey(m_hwnd, id);
-        for (int id = 100; id <= 114; ++id) UnregisterHotKey(m_hwnd, id);
+        for (int id = 100; id <= 115; ++id) UnregisterHotKey(m_hwnd, id);
     }
 }
 
@@ -221,6 +222,7 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
     RegisterHotKey(m_hwnd, 112, 0, VK_F1);                   // F1 About
     RegisterHotKey(m_hwnd, 113, MOD_CONTROL | MOD_SHIFT, 'R'); // Ctrl+Shift+R regenerate last
     RegisterHotKey(m_hwnd, 114, 0, VK_F2);                     // F2 hotkey hints overlay
+    RegisterHotKey(m_hwnd, 115, MOD_CONTROL, 'U');             // Ctrl+U install pending update
 
     // User-configurable semantic hotkeys (IDs 1..Count, from config)
     RegisterConfigHotkeys();
@@ -332,6 +334,19 @@ LRESULT CALLBACK OverlayWindow::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, 
                 case 112: pThis->ShowAbout(); return 0;
                 case 113: pThis->RegenerateLastAnswer(); return 0;
                 case 114: pThis->ToggleHotkeyHints(); return 0;
+                case 115: {
+                    // Install staged update + restart
+                    HWND hwnd = pThis->m_hwnd;
+                    Updater::InstallAndRestart([hwnd](const Updater::Status& st) {
+                        std::wstring msg = st.message;
+                        auto* pair = new std::pair<std::wstring, std::wstring>(msg, std::wstring());
+                        PostMessage(hwnd, WM_POLL_RESULT, 0, (LPARAM)pair);
+                    });
+                    // Give the new process a moment to start, then exit.
+                    Sleep(800);
+                    PostQuitMessage(0);
+                    return 0;
+                }
             }
             // Configurable semantic hotkeys: ID = (HotkeyAction value) + 1
             int idx = (int)wParam - 1;
@@ -1065,7 +1080,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), &path[0], n);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.1 UpdateCheck",
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.2 UpdateCheck",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
     WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
@@ -1108,7 +1123,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         a = b = c = 0;
         sscanf(s.c_str(), "%d.%d.%d", &a, &b, &c);
     };
-    int ra, rb, rc, ma = 2, mb = 4, mc = 1;
+    int ra, rb, rc, ma = 2, mb = 4, mc = 2;
     parseVer(tag, ra, rb, rc);
     bool newer = (ra > ma) || (ra == ma && rb > mb) || (ra == ma && rb == mb && rc > mc);
     if (!newer) return;
@@ -1129,8 +1144,16 @@ void OverlayWindow::CheckForUpdateAsync()
 {
     if (m_config.update_check_url.empty()) return;
     HWND hwnd = m_hwnd;
-    std::string url = m_config.update_check_url;
-    std::thread([hwnd, url]() { DoUpdateCheck(hwnd, url); }).detach();
+
+    // New flow: full updater (check → download → ready). Status updates go to
+    // the transcript bar via WM_POLL_RESULT with empty questionText.
+    Updater::CheckAndDownloadAsync(m_config.update_check_url, L"2.4.2",
+        [hwnd](const Updater::Status& st) {
+            // Bridge to UI thread by reusing WM_POLL_RESULT (transcript-only update).
+            std::wstring msg = st.message;
+            auto* pair = new std::pair<std::wstring, std::wstring>(msg, std::wstring());
+            PostMessage(hwnd, WM_POLL_RESULT, 0, (LPARAM)pair);
+        });
 }
 
 void OverlayWindow::ToggleHotkeyHints()
@@ -1186,7 +1209,7 @@ void OverlayWindow::ShowAbout()
 {
     MessageBoxW(m_hwnd,
         L"Invisible AI Overlay\n"
-        L"Version 2.4.1\n\n"
+        L"Version 2.4.2\n\n"
         L"Live interview & study copilot.\n"
         L"Captures system audio, screenshots, clipboard text.\n"
         L"Streams answers from Gemini / Claude / OpenAI / etc.\n\n"
