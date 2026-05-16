@@ -215,14 +215,17 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
     RegisterHotKey(m_hwnd, 105, MOD_SHIFT, VK_LEFT);   // scroll code left
     RegisterHotKey(m_hwnd, 106, MOD_SHIFT, VK_RIGHT);  // scroll code right
     RegisterHotKey(m_hwnd, 107, 0, VK_F11);            // runtime settings
-    RegisterHotKey(m_hwnd, 108, MOD_CONTROL, VK_OEM_PLUS);   // Ctrl+= font bigger
-    RegisterHotKey(m_hwnd, 109, MOD_CONTROL, VK_OEM_MINUS);  // Ctrl+- font smaller
-    RegisterHotKey(m_hwnd, 110, MOD_CONTROL, 'E');           // Ctrl+E export
-    RegisterHotKey(m_hwnd, 111, MOD_CONTROL, 'F');           // Ctrl+F search
-    RegisterHotKey(m_hwnd, 112, 0, VK_F1);                   // F1 About
-    RegisterHotKey(m_hwnd, 113, MOD_CONTROL | MOD_SHIFT, 'R'); // Ctrl+Shift+R regenerate last
-    RegisterHotKey(m_hwnd, 114, 0, VK_F2);                     // F2 hotkey hints overlay
-    RegisterHotKey(m_hwnd, 115, MOD_CONTROL, 'U');             // Ctrl+U install pending update
+    // All Ctrl+letter shortcuts are global hotkeys — they'd hijack system
+    // shortcuts (zoom, find, refresh, etc.) in every other app. Use Ctrl+Alt
+    // combos instead — almost never bound by other apps.
+    RegisterHotKey(m_hwnd, 108, MOD_CONTROL | MOD_ALT, VK_OEM_PLUS);   // Ctrl+Alt+= font bigger
+    RegisterHotKey(m_hwnd, 109, MOD_CONTROL | MOD_ALT, VK_OEM_MINUS);  // Ctrl+Alt+- font smaller
+    RegisterHotKey(m_hwnd, 110, MOD_CONTROL | MOD_ALT, 'E');           // Ctrl+Alt+E export
+    RegisterHotKey(m_hwnd, 111, MOD_CONTROL | MOD_ALT, 'F');           // Ctrl+Alt+F search
+    RegisterHotKey(m_hwnd, 112, 0, VK_F1);                              // F1 About
+    RegisterHotKey(m_hwnd, 113, MOD_CONTROL | MOD_ALT, 'G');           // Ctrl+Alt+G regenerate last
+    RegisterHotKey(m_hwnd, 114, 0, VK_F2);                              // F2 hotkey hints overlay
+    RegisterHotKey(m_hwnd, 115, MOD_CONTROL | MOD_ALT, 'U');           // Ctrl+Alt+U install pending update
 
     // User-configurable semantic hotkeys (IDs 1..Count, from config)
     RegisterConfigHotkeys();
@@ -1080,7 +1083,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), &path[0], n);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.2 UpdateCheck",
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.3 UpdateCheck",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
     WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
@@ -1123,7 +1126,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         a = b = c = 0;
         sscanf(s.c_str(), "%d.%d.%d", &a, &b, &c);
     };
-    int ra, rb, rc, ma = 2, mb = 4, mc = 2;
+    int ra, rb, rc, ma = 2, mb = 4, mc = 3;
     parseVer(tag, ra, rb, rc);
     bool newer = (ra > ma) || (ra == ma && rb > mb) || (ra == ma && rb == mb && rc > mc);
     if (!newer) return;
@@ -1147,7 +1150,7 @@ void OverlayWindow::CheckForUpdateAsync()
 
     // New flow: full updater (check → download → ready). Status updates go to
     // the transcript bar via WM_POLL_RESULT with empty questionText.
-    Updater::CheckAndDownloadAsync(m_config.update_check_url, L"2.4.2",
+    Updater::CheckAndDownloadAsync(m_config.update_check_url, L"2.4.3",
         [hwnd](const Updater::Status& st) {
             // Bridge to UI thread by reusing WM_POLL_RESULT (transcript-only update).
             std::wstring msg = st.message;
@@ -1209,7 +1212,7 @@ void OverlayWindow::ShowAbout()
 {
     MessageBoxW(m_hwnd,
         L"Invisible AI Overlay\n"
-        L"Version 2.4.2\n\n"
+        L"Version 2.4.3\n\n"
         L"Live interview & study copilot.\n"
         L"Captures system audio, screenshots, clipboard text.\n"
         L"Streams answers from Gemini / Claude / OpenAI / etc.\n\n"

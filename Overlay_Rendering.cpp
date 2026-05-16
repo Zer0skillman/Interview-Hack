@@ -694,13 +694,14 @@ void OverlayWindow::OnPaint(HWND hwnd)
             ly += 16;
         }
         const wchar_t* fixed[] = {
-            L"  F1            About",
-            L"  F2            This panel",
-            L"  F11           Runtime settings",
-            L"  Ctrl+E        Export chat to .md",
-            L"  Ctrl+F        Search chat",
-            L"  Ctrl+= / -    Font size",
-            L"  Ctrl+Shift+R  Regenerate last answer",
+            L"  F1                About",
+            L"  F2                This panel",
+            L"  F11               Runtime settings",
+            L"  Ctrl+Alt+E        Export chat to .md",
+            L"  Ctrl+Alt+F        Search chat",
+            L"  Ctrl+Alt+= / -    Font size",
+            L"  Ctrl+Alt+G        Regenerate last answer",
+            L"  Ctrl+Alt+U        Install staged update",
             L"  Shift+Left/Right  Scroll code horizontally",
         };
         ly += 4;

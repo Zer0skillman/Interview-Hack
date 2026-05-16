@@ -57,6 +57,22 @@ LLMConfig ConfigLoader::LoadConfig(const std::string& filepath) {
             }
         }
     }
+
+    // One-time migration: pre-2.4.3 defaults hijacked system shortcuts (Ctrl+C,
+    // Ctrl+R, Ctrl+Shift+C) globally, which broke text copying / browser
+    // refresh / DevTools everywhere. If the user still has those exact old
+    // bindings, transparently swap them to the new Ctrl+Alt+* defaults.
+    auto migrate = [&](HotkeyAction a, UINT oldMods, UINT oldVk, UINT newMods, UINT newVk) {
+        auto& b = config.hotkeys.bindings[(int)a];
+        if (b.modifiers == oldMods && b.vk == oldVk) {
+            b.modifiers = newMods;
+            b.vk = newVk;
+        }
+    };
+    migrate(HotkeyAction::CopyAnswer, MOD_CONTROL,             'C', MOD_CONTROL | MOD_ALT, 'C');
+    migrate(HotkeyAction::ResetChat,  MOD_CONTROL,             'R', MOD_CONTROL | MOD_ALT, 'R');
+    migrate(HotkeyAction::SelectMode, MOD_CONTROL | MOD_SHIFT, 'C', MOD_CONTROL | MOD_ALT, 'S');
+
     return config;
 }
 
@@ -210,9 +226,12 @@ HotkeyConfig ConfigLoader::DefaultHotkeys() {
     c.bindings[(int)HotkeyAction::SendAudio]        = { 0, VK_F7 };
     c.bindings[(int)HotkeyAction::ToggleAuto]       = { 0, VK_F9 };
     c.bindings[(int)HotkeyAction::MoveMode]         = { 0, VK_F10 };
-    c.bindings[(int)HotkeyAction::ResetChat]        = { MOD_CONTROL, 'R' };
-    c.bindings[(int)HotkeyAction::CopyAnswer]       = { MOD_CONTROL, 'C' };
-    c.bindings[(int)HotkeyAction::SelectMode]       = { MOD_CONTROL | MOD_SHIFT, 'C' };
+    // Ctrl+R / Ctrl+C / Ctrl+Shift+C would hijack system shortcuts (refresh,
+    // copy, DevTools) globally, so we use Ctrl+Alt combos which apps almost
+    // never bind. Pick distinct letters so they don't collide with each other.
+    c.bindings[(int)HotkeyAction::ResetChat]        = { MOD_CONTROL | MOD_ALT, 'R' };
+    c.bindings[(int)HotkeyAction::CopyAnswer]       = { MOD_CONTROL | MOD_ALT, 'C' };
+    c.bindings[(int)HotkeyAction::SelectMode]       = { MOD_CONTROL | MOD_ALT, 'S' };
     c.bindings[(int)HotkeyAction::SendText]         = { 0, VK_INSERT };
     c.bindings[(int)HotkeyAction::ToggleVisibility] = { 0, VK_DELETE };
     c.bindings[(int)HotkeyAction::ExitApp]          = { 0, VK_END };

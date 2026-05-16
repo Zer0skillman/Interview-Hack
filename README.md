@@ -68,13 +68,14 @@ All rebindable on the welcome screen except the fixed shortcuts.
 | **DEL** | Hide/show overlay |
 | **END** | Exit |
 | **PgUp / PgDn** | Scroll chat |
-| **Ctrl+R** | Reset conversation |
-| **Ctrl+C** | Copy last AI answer |
-| **Ctrl+Shift+C** | Select-mode (click a bubble to copy it) |
-| **Ctrl+Shift+R** | Regenerate last answer |
-| **Ctrl+E** | Export chat to markdown |
-| **Ctrl+F** | Search chat |
-| **Ctrl+=** / **Ctrl+-** | Grow / shrink font |
+| **Ctrl+Alt+R** | Reset conversation |
+| **Ctrl+Alt+C** | Copy last AI answer |
+| **Ctrl+Alt+S** | Select-mode (click a bubble to copy / edit) |
+| **Ctrl+Alt+G** | Regenerate last answer |
+| **Ctrl+Alt+E** | Export chat to markdown |
+| **Ctrl+Alt+F** | Search chat |
+| **Ctrl+Alt+U** | Install staged update |
+| **Ctrl+Alt+=** / **Ctrl+Alt+-** | Grow / shrink font |
 | **Shift+← / →** | Scroll code blocks horizontally |
 
 ## Build (developers)
