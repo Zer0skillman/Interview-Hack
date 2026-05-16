@@ -1366,69 +1366,7 @@ void OverlayWindow::OpenRuntimeSettings()
     InvalidateRect(m_hwnd, NULL, TRUE);
 }
 
-static void DEAD_REMOVED_BODY() {
-#if 0
-
-    // F8 is screenshot + audio only — no clipboard. Use INS for text-only questions.
-    std::wstring questionText =
-        L"Answer the question being asked. The attached audio is the last ~30s of the meeting — "
-        L"find the interviewer's question in there and answer it. The screenshot shows what is on "
-        L"the screen right now (often a coding problem). If both are present, the audio is the "
-        L"question and the screenshot is the context.";
-
-    // Capture screen synchronously (fast; overlay is excluded via WDA_EXCLUDEFROMCAPTURE)
-    std::string pngBase64 = CaptureScreenshotAsBase64Png();
-
-    // Snapshot the last 30 seconds of meeting audio (loopback). Empty if no audio yet.
-    std::string wavBase64 = m_audio.SnapshotAsBase64Wav(30);
-
-    // Drop audio if the current provider doesn't accept it (Claude, OpenAI, etc.)
-    if (!LLMClient::ProviderSupportsAudio(m_config.provider)) {
-        wavBase64.clear();
-    }
-
-    // Show what we sent in the chat — keep it short so it doesn't clutter
-    std::wstring tag;
-    if (!pngBase64.empty() && !wavBase64.empty())      tag = L"[screen + audio] ";
-    else if (!pngBase64.empty())                       tag = L"[screen] ";
-    else if (!wavBase64.empty())                       tag = L"[audio] ";
-    else                                               tag = L"[screen capture failed] ";
-
-    ChatMessage userMsg;
-    userMsg.text = tag + questionText;
-    userMsg.isUser = true;
-    m_messages.push_back(userMsg);
-
-    ChatMessage botMsg;
-    botMsg.text = L"Thinking...";
-    botMsg.isUser = false;
-    m_messages.push_back(botMsg);
-
-    m_scrollOffset = kScrollToBottom;
-    InvalidateRect(m_hwnd, NULL, TRUE);
-
-    // Snapshot history before this turn
-    std::vector<LLMTurn> history;
-    if (m_messages.size() >= 2) {
-        history.reserve(m_messages.size() - 2);
-        for (size_t i = 0; i + 2 < m_messages.size(); ++i) {
-            history.push_back({ m_messages[i].isUser, m_messages[i].text });
-        }
-    }
-
-    LLMConfig cfg = m_config;
-    HWND hwnd = m_hwnd;
-    std::wstring question = questionText;
-
-    std::thread([hwnd, question, history, cfg, pngBase64, wavBase64]() {
-        LLMClient::GenerateContentStreaming(question, history, cfg, pngBase64, wavBase64,
-            [hwnd](const std::wstring& chunk, bool isFinal) {
-                std::wstring* heap = new std::wstring(chunk);
-                PostMessage(hwnd, WM_LLM_CHUNK, isFinal ? 1 : 0, (LPARAM)heap);
-            });
-    }).detach();
-#endif
-}
+// (old DEAD_REMOVED_BODY block deleted)
 
 // PNG encoder CLSID for GDI+ Image::Save
 static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
