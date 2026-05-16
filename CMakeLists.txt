@@ -9,14 +9,14 @@
 #   cmake --build build --config Release
 #   .\build\overlay.exe
 #
-# Quick start (macOS — once macos/ sources exist):
+# Quick start (macOS):
 #   cmake -B build
 #   cmake --build build
-#   ./build/InvisibleAIOverlay.app/Contents/MacOS/overlay
+#   open build/overlay.app
 
 cmake_minimum_required(VERSION 3.16)
 project(InvisibleAIOverlay
-    VERSION 2.4.3
+    VERSION 2.5.0
     LANGUAGES CXX
     DESCRIPTION "Invisible AI Overlay — live interview & study copilot"
 )
@@ -46,6 +46,8 @@ set(COMMON_HEADERS
     Parsers.h
     IAudioCapture.h
     IScreenshot.h
+    HttpClient.h
+    WinCompat.h
 )
 
 # ---------------------------------------------------------------------------
@@ -59,6 +61,7 @@ if(WIN32)
         ConfigDialog.cpp
         AudioCapture.cpp
         Screenshot_Win.cpp
+        HttpClient_Win.cpp
     )
 
     # Compile the Win32 resource (icon + manifest + version info)
@@ -78,13 +81,66 @@ if(WIN32)
     endif()
 
 elseif(APPLE)
-    # macOS sources land here once the port is underway. Until then this
-    # branch intentionally fails so nobody mistakes an unfinished port for
-    # a working build.
-    message(FATAL_ERROR
-        "macOS build target not yet implemented. "
-        "The port is planned; see ROADMAP. "
-        "For now build on Windows.")
+    enable_language(OBJCXX)
+
+    set(MAC_SOURCES
+        macos/main_mac.mm
+        macos/MacAudioCapture.mm
+        macos/Screenshot_Mac.mm
+        macos/MacOverlayWindow.mm
+        macos/MacRenderer.mm
+        macos/MacConfigDialog.mm
+        macos/HttpClient_Mac.mm
+    )
+
+    add_executable(overlay MACOSX_BUNDLE
+        ${COMMON_SOURCES} ${COMMON_HEADERS} ${MAC_SOURCES})
+
+    set_target_properties(overlay PROPERTIES
+        OUTPUT_NAME "overlay"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/macos/Info.plist"
+        MACOSX_BUNDLE_BUNDLE_NAME "Invisible AI Overlay"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.zer0skillman.interview-hack"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+
+    # ScreenCaptureKit needs macOS 12.3+; SCScreenshotManager (the only
+    # supported screenshot API after CGDisplayCreateImage was removed in
+    # macOS 15) is 14+, so 14.0 is the minimum target.
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "" FORCE)
+    set_target_properties(overlay PROPERTIES
+        XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "14.0"
+    )
+
+    # ARC for all .mm files. The retain/release rules become automatic, so
+    # __bridge_retained / __bridge_transfer casts actually transfer ownership
+    # the way the code assumes.
+    set_source_files_properties(${MAC_SOURCES} PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc")
+
+    # libcurl ships with macOS — find it via pkg-config or the framework path.
+    find_package(CURL REQUIRED)
+    target_link_libraries(overlay PRIVATE CURL::libcurl)
+
+    target_link_libraries(overlay PRIVATE
+        "-framework Cocoa"
+        "-framework AppKit"
+        "-framework Foundation"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework AVFoundation"
+        "-framework CoreMedia"
+        "-framework ScreenCaptureKit"
+        "-framework CoreGraphics"
+        "-framework ImageIO"
+        "-framework UniformTypeIdentifiers"
+        "-framework Carbon"
+    )
+
+    target_compile_options(overlay PRIVATE
+        -Wno-deprecated-declarations   # Carbon hotkey API is deprecated but still the right answer
+    )
 
 else()
     message(FATAL_ERROR "Unsupported platform; Linux build not planned.")

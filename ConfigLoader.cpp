@@ -1,7 +1,11 @@
 #include "ConfigLoader.h"
 #include <fstream>
 #include <sstream>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include "WinCompat.h"
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>

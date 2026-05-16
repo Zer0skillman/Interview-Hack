@@ -12,7 +12,7 @@ permissions:
   contents: write  # needed for creating releases on tag pushes
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     timeout-minutes: 15
 
@@ -56,7 +56,7 @@ jobs:
       - name: Upload artifact (every build)
         uses: actions/upload-artifact@v4
         with:
-          name: overlay-${{ github.sha }}
+          name: overlay-windows-${{ github.sha }}
           path: project_app/
           retention-days: 14
 
@@ -66,16 +66,67 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $name = "Interview-Hack-${{ github.ref_name }}.zip"
+          $name = "Interview-Hack-${{ github.ref_name }}-windows.zip"
           Compress-Archive -Path project_app\* -DestinationPath $name -Force
           Get-Item $name | Select-Object Name, Length
 
-      - name: Create GitHub Release
+      - name: Create / update GitHub Release (Windows zip)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: Interview-Hack-${{ github.ref_name }}.zip
+          files: Interview-Hack-${{ github.ref_name }}-windows.zip
           generate_release_notes: true
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          cmake --version
+          clang++ --version
+
+      - name: CMake configure + build
+        run: |
+          cmake -B build-cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cmake --parallel
+          test -f build-cmake/overlay.app/Contents/MacOS/overlay
+          test -f build-cmake/tests
+          ./build-cmake/tests
+
+      - name: Stage .app bundle for artifact
+        run: |
+          mkdir -p mac_app
+          cp -R build-cmake/overlay.app mac_app/
+          cp models_list.txt mac_app/ || true
+          cp README.md mac_app/ || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-macos-${{ github.sha }}
+          path: mac_app/
+          retention-days: 14
+
+      - name: Package release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd mac_app
+          zip -ry "../Interview-Hack-${{ github.ref_name }}-macos.zip" .
+          cd ..
+          ls -la Interview-Hack-${{ github.ref_name }}-macos.zip
+
+      - name: Attach macOS zip to the same Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Interview-Hack-${{ github.ref_name }}-macos.zip
           name: ${{ github.ref_name }}
           draft: false
           prerelease: false

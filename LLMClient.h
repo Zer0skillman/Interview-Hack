@@ -36,6 +36,13 @@ public:
     // True if the provider can accept inline audio bytes (only Gemini today).
     static bool ProviderSupportsAudio(const std::string& provider);
 
+    // UTF-8 <-> wstring helpers used across the codebase (clipboard send,
+    // window persistence, hotkey labels). Exposed because callers in
+    // MacOverlayWindow.mm and elsewhere need the same conversion.
+    static std::string  WideToUtf8(const std::wstring& wstr);
+    static std::wstring Utf8ToWide(const std::string& str);
+    static std::string  JsonEscapeUtf8(const std::string& utf8);
+
     struct ClassifyResult {
         std::wstring transcript;
         std::wstring questionText;   // non-empty iff a substantive question was detected
@@ -108,8 +115,4 @@ private:
 
     static std::wstring ExtractFirstTextField(const std::wstring& json);
     static std::wstring ExtractErrorMessage(const std::wstring& json);
-
-    static std::string WideToUtf8(const std::wstring& wstr);
-    static std::wstring Utf8ToWide(const std::string& str);
-    static std::string JsonEscapeUtf8(const std::string& utf8);
 };

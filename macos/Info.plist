@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Invisible AI Overlay</string>
+    <key>CFBundleDisplayName</key>
+    <string>Invisible AI Overlay</string>
+    <key>CFBundleExecutable</key>
+    <string>overlay</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.zer0skillman.interview-hack</string>
+    <key>CFBundleVersion</key>
+    <string>2.5.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.5.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- LSUIElement hides the app from the Dock and Cmd-Tab — appropriate for
+         an overlay-only tool. The window itself is borderless and shows above
+         everything. Settings/welcome dialog is reachable via the hotkey. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Captures meeting audio and screenshots so the AI can answer interview questions.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Optional: captures your microphone if you enable it in settings.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Reads clipboard for the &quot;send clipboard text&quot; hotkey.</string>
+</dict>
+</plist>

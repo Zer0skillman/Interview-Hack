@@ -11,25 +11,28 @@ clipboard text; sends to an LLM (Gemini/Claude/GPT-4o/Groq/etc.); streams the
 answer into a chat overlay that's hidden from screen capture
 (`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`).
 
-Current version: **2.4.4** (or whatever's in `app.rc`). Repo:
-<https://github.com/Zer0skillman/Interview-Hack>.
+Current version: **2.5.0** (or whatever's in `app.rc`). Repo:
+<https://github.com/Zer0skillman/Interview-Hack>. **macOS port is live**
+(phase 2 landed) — both Windows and macOS build from this repo.
 
 ## File map (high level)
 
 | Purpose | Files |
 |---|---|
-| Cross-platform interfaces | `IAudioCapture.h`, `IScreenshot.h` |
-| Windows impls | `AudioCapture.cpp`, `Screenshot_Win.cpp`, `OverlayWindow.cpp`, `Overlay_Rendering.cpp`, `ConfigDialog.cpp`, `main.cpp` |
-| Cross-platform business | `LLMClient.cpp`, `ConfigLoader.cpp`, `Logger.cpp`, `Updater.cpp`, `Parsers.h` |
+| Cross-platform interfaces | `IAudioCapture.h`, `IScreenshot.h`, `HttpClient.h` |
+| Windows impls | `AudioCapture.cpp`, `Screenshot_Win.cpp`, `OverlayWindow.cpp`, `Overlay_Rendering.cpp`, `ConfigDialog.cpp`, `main.cpp`, `HttpClient_Win.cpp` |
+| macOS impls | `macos/MacAudioCapture.mm`, `macos/Screenshot_Mac.mm`, `macos/MacOverlayWindow.mm` (+`.h`), `macos/MacRenderer.mm`, `macos/MacConfigDialog.mm`, `macos/main_mac.mm`, `macos/HttpClient_Mac.mm`, `macos/Info.plist` |
+| Cross-platform business | `LLMClient.cpp`, `ConfigLoader.cpp`, `Logger.cpp`, `Updater.cpp`, `Parsers.h`, `WinCompat.h` (stubs MOD_*/VK_*/RGB on non-Windows) |
 | Tests | `tests.cpp` (parsers only) — separate exe, 27 checks |
-| Build | `build_release.ps1` (Windows-only fast path), `CMakeLists.txt` (cross-platform), `.github/workflows/build.yml` (CI runs both) |
-| macOS port (in progress) | `MACOS_PORT.md` — start there if working on Cocoa |
+| Build | `build_release.ps1` (Windows-only fast path), `CMakeLists.txt` (cross-platform), `.github/workflows/build.yml` (CI runs both Windows + macOS) |
+| macOS port docs | `MACOS_PORT.md` — phase 2 is now in the repo; still useful for understanding the design |
 
 ## Build
 
 ```powershell
 .\build_release.ps1                # Windows, fast iteration, produces project_app\overlay.exe
-cmake -B build && cmake --build build  # cross-platform, future macOS path
+cmake -B build && cmake --build build  # cross-platform — Windows or macOS
+                                       # On macOS, produces build/overlay.app
 ```
 
 CI exercises both paths on every push.

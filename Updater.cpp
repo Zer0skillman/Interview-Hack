@@ -1,52 +1,99 @@
-#define WIN32_LEAN_AND_MEAN
 #include "Updater.h"
-
-#include <windows.h>
-#include <winhttp.h>
-#include <shellapi.h>
-#include <cstdio>
-#include <cstdlib>
-#include <vector>
-#include <thread>
-#include <mutex>
-
+#include "HttpClient.h"
 #include "Parsers.h"  // ExtractJsonStringField
 
-#pragma comment(lib, "winhttp.lib")
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwctype>
+#include <filesystem>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>
 #pragma comment(lib, "shell32.lib")
+#endif
 
 namespace Updater {
 
-// Module state — Status::Ready stores the path to the staged new exe
 static std::mutex s_mutex;
 static std::wstring s_stagedNewExePath;
 static std::wstring s_stagedTag;
 
 // ---------------------------------------------------------------------------
-// String helpers
+// Tiny portable UTF-8 conversions (same logic as LLMClient's)
 // ---------------------------------------------------------------------------
 
-static std::wstring Utf8ToW(const std::string& s) {
-    if (s.empty()) return std::wstring();
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), NULL, 0);
-    std::wstring w(n, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
-    return w;
+static std::string WToUtf8(const std::wstring& w) {
+    std::string out;
+    out.reserve(w.size() * 2);
+    for (size_t i = 0; i < w.size(); ++i) {
+        uint32_t cp = (uint32_t)w[i];
+        if (sizeof(wchar_t) == 2 && cp >= 0xD800 && cp <= 0xDBFF && i + 1 < w.size()) {
+            uint32_t low = (uint32_t)w[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        if (cp < 0x80) out += (char)cp;
+        else if (cp < 0x800) {
+            out += (char)(0xC0 | (cp >> 6));
+            out += (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            out += (char)(0xE0 | (cp >> 12));
+            out += (char)(0x80 | ((cp >> 6) & 0x3F));
+            out += (char)(0x80 | (cp & 0x3F));
+        } else {
+            out += (char)(0xF0 | (cp >> 18));
+            out += (char)(0x80 | ((cp >> 12) & 0x3F));
+            out += (char)(0x80 | ((cp >> 6) & 0x3F));
+            out += (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    return out;
 }
 
-static std::string WToUtf8(const std::wstring& w) {
-    if (w.empty()) return std::string();
-    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), NULL, 0, NULL, NULL);
-    std::string s(n, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, NULL, NULL);
-    return s;
+static std::wstring Utf8ToW(const std::string& s) {
+    std::wstring out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        unsigned char b = (unsigned char)s[i];
+        uint32_t cp = 0; int extra = 0;
+        if (b < 0x80) { cp = b; extra = 0; }
+        else if ((b & 0xE0) == 0xC0) { cp = b & 0x1F; extra = 1; }
+        else if ((b & 0xF0) == 0xE0) { cp = b & 0x0F; extra = 2; }
+        else if ((b & 0xF8) == 0xF0) { cp = b & 0x07; extra = 3; }
+        else { i++; continue; }
+        ++i;
+        for (int k = 0; k < extra; ++k) {
+            if (i >= s.size()) { cp = 0; break; }
+            cp = (cp << 6) | ((unsigned char)s[i] & 0x3F); ++i;
+        }
+        if (sizeof(wchar_t) == 2 && cp > 0xFFFF) {
+            cp -= 0x10000;
+            out += (wchar_t)(0xD800 + (cp >> 10));
+            out += (wchar_t)(0xDC00 + (cp & 0x3FF));
+        } else {
+            out += (wchar_t)cp;
+        }
+    }
+    return out;
 }
+
+// ---------------------------------------------------------------------------
+// Version comparison
+// ---------------------------------------------------------------------------
 
 static int ParseVersionPart(const std::wstring& v, int idx) {
     int a, b, c;
     a = b = c = 0;
-    int got = swscanf(v.c_str(), L"%d.%d.%d", &a, &b, &c);
-    (void)got;
+    swscanf(v.c_str(), L"%d.%d.%d", &a, &b, &c);
     if (idx == 0) return a;
     if (idx == 1) return b;
     return c;
@@ -61,164 +108,45 @@ static bool IsNewer(const std::wstring& remote, const std::wstring& current) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTPS GET — text body (small, all in memory)
-// ---------------------------------------------------------------------------
-
-static bool HttpsGetText(const std::string& url, std::string& outBody) {
-    if (url.rfind("https://", 0) != 0) return false;
-    std::string s = url.substr(8);
-    size_t slash = s.find('/');
-    std::wstring host = Utf8ToW(slash == std::string::npos ? s : s.substr(0, slash));
-    std::wstring path = Utf8ToW(slash == std::string::npos ? "/" : s.substr(slash));
-
-    HINTERNET sess = WinHttpOpen(L"AIOverlay/Updater",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!sess) return false;
-    WinHttpSetTimeouts(sess, 5000, 10000, 10000, 30000);
-
-    HINTERNET conn = WinHttpConnect(sess, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!conn) { WinHttpCloseHandle(sess); return false; }
-
-    HINTERNET req = WinHttpOpenRequest(conn, L"GET", path.c_str(), NULL,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!req) { WinHttpCloseHandle(conn); WinHttpCloseHandle(sess); return false; }
-
-    DWORD flags = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
-    WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &flags, sizeof(flags));
-
-    BOOL ok = WinHttpSendRequest(req,
-        L"Accept: application/json\r\nUser-Agent: AIOverlay-Updater",
-        -1L, NULL, 0, 0, 0);
-    if (ok) ok = WinHttpReceiveResponse(req, NULL);
-
-    if (ok) {
-        DWORD avail = 0, downloaded = 0;
-        while (WinHttpQueryDataAvailable(req, &avail) && avail > 0) {
-            std::vector<char> buf(avail + 1, 0);
-            if (!WinHttpReadData(req, buf.data(), avail, &downloaded)) break;
-            outBody.append(buf.data(), downloaded);
-            if (outBody.size() > 5 * 1024 * 1024) break;  // sanity cap
-        }
-    }
-
-    WinHttpCloseHandle(req);
-    WinHttpCloseHandle(conn);
-    WinHttpCloseHandle(sess);
-    return ok && !outBody.empty();
-}
-
-// ---------------------------------------------------------------------------
-// HTTPS GET — binary body streamed to a file with progress callback
-// ---------------------------------------------------------------------------
-
-static bool HttpsDownloadToFile(const std::string& url, const std::wstring& destPath,
-                                std::function<void(int)> onPercent)
-{
-    if (url.rfind("https://", 0) != 0) return false;
-    std::string s = url.substr(8);
-    size_t slash = s.find('/');
-    std::wstring host = Utf8ToW(slash == std::string::npos ? s : s.substr(0, slash));
-    std::wstring path = Utf8ToW(slash == std::string::npos ? "/" : s.substr(slash));
-
-    HINTERNET sess = WinHttpOpen(L"AIOverlay/Updater",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!sess) return false;
-    WinHttpSetTimeouts(sess, 5000, 10000, 60000, 120000);
-
-    HINTERNET conn = WinHttpConnect(sess, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!conn) { WinHttpCloseHandle(sess); return false; }
-
-    HINTERNET req = WinHttpOpenRequest(conn, L"GET", path.c_str(), NULL,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!req) { WinHttpCloseHandle(conn); WinHttpCloseHandle(sess); return false; }
-
-    DWORD flags = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
-    WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &flags, sizeof(flags));
-
-    BOOL ok = WinHttpSendRequest(req,
-        L"User-Agent: AIOverlay-Updater",
-        -1L, NULL, 0, 0, 0);
-    if (ok) ok = WinHttpReceiveResponse(req, NULL);
-    if (!ok) {
-        WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(sess);
-        return false;
-    }
-
-    // Total length (may be missing on chunked transfers)
-    DWORD contentLen = 0;
-    DWORD lenSz = sizeof(contentLen);
-    WinHttpQueryHeaders(req,
-        WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
-        WINHTTP_HEADER_NAME_BY_INDEX, &contentLen, &lenSz, WINHTTP_NO_HEADER_INDEX);
-
-    HANDLE hFile = CreateFileW(destPath.c_str(), GENERIC_WRITE, 0, NULL,
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(sess);
-        return false;
-    }
-
-    DWORD totalDownloaded = 0;
-    int lastPct = -1;
-    bool success = true;
-    while (true) {
-        DWORD avail = 0;
-        if (!WinHttpQueryDataAvailable(req, &avail)) { success = false; break; }
-        if (avail == 0) break;
-        std::vector<char> buf(avail);
-        DWORD got = 0;
-        if (!WinHttpReadData(req, buf.data(), avail, &got)) { success = false; break; }
-        DWORD wrote = 0;
-        WriteFile(hFile, buf.data(), got, &wrote, NULL);
-        totalDownloaded += got;
-        if (contentLen > 0 && onPercent) {
-            int pct = (int)((100ULL * totalDownloaded) / contentLen);
-            if (pct != lastPct) {
-                onPercent(pct);
-                lastPct = pct;
-            }
-        }
-    }
-
-    CloseHandle(hFile);
-    WinHttpCloseHandle(req);
-    WinHttpCloseHandle(conn);
-    WinHttpCloseHandle(sess);
-
-    if (success && onPercent && lastPct != 100) onPercent(100);
-    return success;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
+// Platform-specific helpers
 // ---------------------------------------------------------------------------
 
 static std::wstring TempDir() {
+#ifdef _WIN32
     wchar_t buf[MAX_PATH];
     DWORD n = GetTempPathW(MAX_PATH, buf);
-    if (n == 0) return L"C:\\Windows\\Temp";
+    if (n == 0) return L"C:\\Windows\\Temp\\";
     std::wstring s(buf, n);
     if (!s.empty() && s.back() != L'\\') s += L'\\';
     return s;
+#else
+    const char* t = std::getenv("TMPDIR");
+    std::string s = t ? t : "/tmp/";
+    if (s.empty() || s.back() != '/') s += '/';
+    return Utf8ToW(s);
+#endif
 }
 
 static std::wstring CurrentExePath() {
+#ifdef _WIN32
     wchar_t buf[MAX_PATH];
     GetModuleFileNameW(NULL, buf, MAX_PATH);
     return buf;
+#else
+    // On Mac the bundle path is what matters for install, not the inner
+    // executable. For now return the executable path; install is disabled
+    // on Mac anyway.
+    return L"";
+#endif
 }
 
-// Extract the first browser_download_url for an asset whose name ends in .zip
+// Look for the first browser_download_url that ends in .zip
 static std::wstring FindZipAssetUrl(const std::wstring& body) {
-    // body has multiple assets[] entries; for each, look for "browser_download_url"
-    // and check that the surrounding "name" field ends in .zip.
-    // Simple approach: find each browser_download_url, return the first that contains ".zip".
     std::wstring needle = L"\"browser_download_url\"";
     size_t pos = 0;
     while ((pos = body.find(needle, pos)) != std::wstring::npos) {
         std::wstring v = parsers::ExtractJsonStringField(body.substr(pos), L"browser_download_url");
         if (v.empty()) { pos += needle.size(); continue; }
-        // case-insensitive .zip check
         std::wstring lower = v;
         for (auto& c : lower) c = (wchar_t)towlower(c);
         if (lower.size() >= 4 && lower.substr(lower.size() - 4) == L".zip") {
@@ -229,6 +157,7 @@ static std::wstring FindZipAssetUrl(const std::wstring& body) {
     return L"";
 }
 
+#ifdef _WIN32
 // Find overlay.exe under a directory tree (max depth 3).
 static std::wstring FindOverlayExe(const std::wstring& root, int depth = 0) {
     if (depth > 3) return L"";
@@ -253,24 +182,27 @@ static std::wstring FindOverlayExe(const std::wstring& root, int depth = 0) {
     FindClose(h);
     return found;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 void CleanupAfterRestart() {
-    // Delete <self>.old left from a previous update
+#ifdef _WIN32
     std::wstring oldPath = CurrentExePath() + L".old";
-    // Retry a few times in case the old process hasn't fully exited yet
     for (int i = 0; i < 30; ++i) {
         if (!DeleteFileW(oldPath.c_str())) {
             DWORD err = GetLastError();
-            if (err == ERROR_FILE_NOT_FOUND) return;  // already gone — done
+            if (err == ERROR_FILE_NOT_FOUND) return;
             Sleep(100);
         } else {
             return;
         }
     }
+#endif
+    // No-op on macOS — there's no rename-trick equivalent for .app bundles
+    // and our installer doesn't replace the running app in-place.
 }
 
 void CheckAndDownloadAsync(
@@ -286,16 +218,19 @@ void CheckAndDownloadAsync(
         st.message = L"Checking for updates...";
         if (onStatus) onStatus(st);
 
-        std::string body;
-        if (!HttpsGetText(releasesApiUrl, body)) {
+        std::vector<std::string> headers = {
+            "Accept: application/json",
+            "User-Agent: AIOverlay-Updater",
+        };
+        HttpResponse r = HttpClient::Get(releasesApiUrl, headers);
+        if (!r.errorMsg.empty() || r.body.empty()) {
             st.state = State::Failed;
             st.message = L"Update check failed (network)";
             if (onStatus) onStatus(st);
             return;
         }
 
-        // Parse tag_name
-        std::wstring wbody = Utf8ToW(body);
+        std::wstring wbody = Utf8ToW(r.body);
         std::wstring tag = parsers::ExtractJsonStringField(wbody, L"tag_name");
         if (tag.empty()) {
             st.state = State::Failed;
@@ -304,7 +239,6 @@ void CheckAndDownloadAsync(
             return;
         }
 
-        // Strip leading 'v'
         std::wstring tagNum = tag;
         if (!tagNum.empty() && (tagNum[0] == L'v' || tagNum[0] == L'V')) tagNum.erase(0, 1);
 
@@ -321,7 +255,7 @@ void CheckAndDownloadAsync(
         st.message = L"Update available: " + tag;
         if (onStatus) onStatus(st);
 
-        // Find the zip asset URL
+#ifdef _WIN32
         std::wstring assetUrlW = FindZipAssetUrl(wbody);
         if (assetUrlW.empty()) {
             st.state = State::Failed;
@@ -331,14 +265,13 @@ void CheckAndDownloadAsync(
         }
         std::string assetUrl = WToUtf8(assetUrlW);
 
-        // Download
         std::wstring tempZip = TempDir() + L"aiov_update_" + tag + L".zip";
         st.state = State::Downloading;
         st.percent = 0;
         st.message = L"Downloading update " + tag + L"...";
         if (onStatus) onStatus(st);
 
-        bool dlOk = HttpsDownloadToFile(assetUrl, tempZip, [&](int pct) {
+        bool dlOk = HttpClient::Download(assetUrl, WToUtf8(tempZip), [&](int pct) {
             st.percent = pct;
             st.message = L"Updating " + tag + L": " + std::to_wstring(pct) + L"%";
             if (onStatus) onStatus(st);
@@ -351,8 +284,6 @@ void CheckAndDownloadAsync(
             return;
         }
 
-        // Extract via built-in tar (Win10 1803+). Output goes to a directory
-        // next to the zip.
         std::wstring extractDir = TempDir() + L"aiov_update_" + tag;
         CreateDirectoryW(extractDir.c_str(), NULL);
 
@@ -377,7 +308,6 @@ void CheckAndDownloadAsync(
             return;
         }
 
-        // Find overlay.exe in the extracted tree
         std::wstring newExe = FindOverlayExe(extractDir);
         if (newExe.empty()) {
             st.state = State::Failed;
@@ -386,7 +316,6 @@ void CheckAndDownloadAsync(
             return;
         }
 
-        // Stash the path for InstallAndRestart
         {
             std::lock_guard<std::mutex> lk(s_mutex);
             s_stagedNewExePath = newExe;
@@ -394,12 +323,20 @@ void CheckAndDownloadAsync(
         }
 
         st.state = State::Ready;
-        st.message = tag + L" ready — press Ctrl+U to install";
+        st.message = tag + L" ready — press the update hotkey to install";
         if (onStatus) onStatus(st);
+#else
+        // macOS: notify but don't auto-install. The .app bundle replacement
+        // story needs a helper script and is best left to a future change.
+        st.state = State::UpdateAvailable;
+        st.message = L"Update " + tag + L" available — download from GitHub Releases.";
+        if (onStatus) onStatus(st);
+#endif
     }).detach();
 }
 
 bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
+#ifdef _WIN32
     std::wstring newExe, tag;
     {
         std::lock_guard<std::mutex> lk(s_mutex);
@@ -420,10 +357,8 @@ bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
     std::wstring current = CurrentExePath();
     std::wstring oldPath = current + L".old";
 
-    // If a .old already exists (from earlier failed update), try to remove it
     DeleteFileW(oldPath.c_str());
 
-    // Rename current → current.old. This works on a running exe.
     if (!MoveFileExW(current.c_str(), oldPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
         st.state = State::Failed;
         st.message = L"Could not rename current exe (locked?)";
@@ -431,9 +366,7 @@ bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
         return false;
     }
 
-    // Copy new exe into the current path
     if (!CopyFileW(newExe.c_str(), current.c_str(), FALSE)) {
-        // Try to restore
         MoveFileExW(oldPath.c_str(), current.c_str(), MOVEFILE_REPLACE_EXISTING);
         st.state = State::Failed;
         st.message = L"Could not copy new exe into place";
@@ -441,7 +374,6 @@ bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
         return false;
     }
 
-    // Launch the new exe
     STARTUPINFOW si{}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     std::wstring cmdline = L"\"" + current + L"\"";
@@ -453,7 +385,6 @@ bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
     }
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 
-    // Tell the caller to exit
     if (onStatus) {
         Status done;
         done.state = State::Idle;
@@ -461,6 +392,15 @@ bool InstallAndRestart(std::function<void(const Status&)> onStatus) {
         onStatus(done);
     }
     return true;
+#else
+    if (onStatus) {
+        Status st;
+        st.state = State::Failed;
+        st.message = L"Auto-install not supported on macOS — download from GitHub.";
+        onStatus(st);
+    }
+    return false;
+#endif
 }
 
 } // namespace Updater
