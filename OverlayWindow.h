@@ -62,6 +62,8 @@ private:
     void ToggleSearch();         // Ctrl+F
     void ShowAbout();            // F1
     void RegenerateLastAnswer(); // Ctrl+Shift+R
+    void ToggleHotkeyHints();    // F2 — show/hide cheat sheet panel
+    void CheckForUpdateAsync();  // fires HTTPS GET if update_check_url is set
     void SaveConversation();     // write chat.txt
     void LoadConversation();     // read chat.txt
 public:
@@ -115,6 +117,7 @@ private:
     // Conversation search
     bool                m_searchActive = false;
     std::wstring        m_searchQuery;
+    bool                m_hintsVisible = false;
 
     // Token meter
     long long           m_tokensIn = 0;

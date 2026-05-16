@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main, memory-based-chat]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # MinGW-w64 g++ is pre-installed on windows-latest runners (C:\msys64).
+      # We extend PATH to make sure the build script finds it.
+      - name: Verify g++ + windres
+        shell: pwsh
+        run: |
+          $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
+          g++ --version
+          windres --version
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
+          .\build_release.ps1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-${{ github.sha }}
+          path: project_app/
+          retention-days: 14

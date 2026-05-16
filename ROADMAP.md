@@ -1,8 +1,8 @@
 # Invisible AI Overlay — Project Status & Roadmap
 
-**Last updated:** 2026-05-16
-**Current version:** 2.2.0
-**Status:** Critical + HIGH + most of NORMAL complete. The product is well past v1.0 quality. Remaining work is the genuinely-large NORMAL items (multi-session, full markdown, full syntax highlighting, edit/regenerate) plus LOW polish.
+**Current version:** 2.3.0
+
+Open work items live in section 5. Section 3 lists what currently works.
 
 ---
 
@@ -50,20 +50,20 @@ Single executable, ~3.8 MB, pure C++ / Win32:
 | `F8` | Send screenshot only | ✅ |
 | `F9` | Toggle auto-answer mode | ✅ |
 | `F10` | Move/resize mode | ✅ |
-| `F11` | **Open runtime settings** (re-show welcome) | fixed |
 | `Ctrl+R` | Reset conversation | ✅ |
 | `Ctrl+C` | Copy last AI answer | ✅ |
 | `Ctrl+Shift+C` | Select-mode: click any chat bubble to copy it | ✅ |
-| `Ctrl+E` | **Export chat to markdown** (opens the file) | fixed |
-| `Ctrl+F` | **Open chat search bar** (type to filter, Enter to jump) | fixed |
-| `Ctrl+=` / `Ctrl+-` | **Grow / shrink chat font** (persisted) | fixed |
-| `F1` | **About dialog** | fixed |
-| `F11` | Open runtime settings | fixed |
+| `Ctrl+Shift+R` | **Regenerate last AI answer** (re-fires the last question) | fixed |
+| `INS` | Send clipboard text | ✅ |
+| `DEL` | Hide / show overlay | ✅ |
+| `END` | Exit | ✅ |
+| `PgUp` / `PgDn` | Scroll chat | ✅ |
+| `Ctrl+E` | Export chat to markdown (opens the file) | fixed |
+| `Ctrl+F` | Open chat search bar | fixed |
+| `Ctrl+=` / `Ctrl+-` | Grow / shrink chat font (persisted) | fixed |
 | `Shift+←` / `Shift+→` | Scroll code blocks horizontally | fixed |
-| `INS` | Send clipboard text | fixed |
-| `DEL` | Hide/show overlay | fixed |
-| `PgUp` / `PgDn` | Scroll chat | fixed |
-| `END` | Exit | fixed |
+| `F1` | About dialog | fixed |
+| `F11` | Open runtime settings | fixed |
 
 Rebinding UI in the welcome screen has a **"Reset to defaults"** button.
 
@@ -115,22 +115,36 @@ Rebinding UI in the welcome screen has a **"Reset to defaults"** button.
 - ✅ **Crash logging**: unhandled exceptions write `logs/crash.txt` with timestamp, exception code, faulting address
 
 ### Sessions & export
-- ✅ **Conversation persists across runs** (`chat.txt`, gated by `restore_session` config). Saved on exit, loaded on launch. Wiped by Ctrl+R.
-- ✅ **Markdown export** via `Ctrl+E` → `chat_export_YYYYMMDD_HHMM.md`, auto-opens in default markdown viewer.
-- ✅ **Chat search**: `Ctrl+F` opens a search bar at the top; type to filter, Enter scrolls to first match, Esc closes.
+- ✅ Conversation persists across runs (`chat.<session>.txt`, gated by `restore_session` config). Saved on exit, loaded on launch. Wiped by Ctrl+R.
+- ✅ **Named sessions** — `session_name` field in welcome screen. Per-session chat files (`chat.<name>.txt`). Switching in F11 settings saves current under old name and loads new.
+- ✅ Markdown export via `Ctrl+E` → `chat_export_YYYYMMDD_HHMM.md`, auto-opens in default markdown viewer
+- ✅ Chat search: `Ctrl+F` opens a search bar at the top; type to filter, Enter scrolls to first match, Esc closes
+- ✅ **Regenerate last answer** (`Ctrl+Shift+R`) — drops last bot reply, re-fires the same question
 
 ### Appearance & personalization
-- ✅ **3 built-in themes** (`dark` default, `light`, `contrast`) — all colors driven by a `ThemeColors` struct
-- ✅ **Adjustable opacity** (60-255 alpha, persisted as `opacity_alpha`)
-- ✅ **Adjustable font size** for prose and code (Ctrl+= / Ctrl+- to grow/shrink, persisted)
-- ✅ **Optional per-message timestamps** (`show_timestamps` config) — dim HH:MM in top-right corner of bubble
-- ✅ **Code block language label** — language identifier after the opening ``` (e.g. `python`) rendered as a small accent-colored tag in the top-right of the code block
-- ✅ **Token meter** in the transcript bar — approximate cumulative input/output tokens this session
-- ✅ **About dialog** (F1) — version, license, brief description
+- ✅ 3 built-in themes (`dark` default, `light`, `contrast`) — all colors driven by a `ThemeColors` struct
+- ✅ Adjustable opacity (60-255 alpha, persisted as `opacity_alpha`)
+- ✅ Adjustable font size for prose and code (Ctrl+= / Ctrl+- to grow/shrink, persisted)
+- ✅ Optional per-message timestamps (`show_timestamps` config) — dim HH:MM in top-right corner of bubble
+- ✅ Code block language label — language identifier after the opening ``` rendered as accent-colored tag
+- ✅ Token meter in the transcript bar
+- ✅ About dialog (F1)
+- ✅ **Syntax highlighting in code blocks**: keywords (purple), strings (orange), numbers (cyan), comments (dim gray-green), brackets (rainbow pair-coloring). Pan-language keyword set covers C-family, Python, JS, Rust, Java.
+- ✅ **Inline markdown stripping** in prose — `**bold**`, `*italic*`, `_underscore_`, and `` `code` `` markers are stripped from display so prose reads cleanly (the originals stay in history for re-send). Full styled rendering (actual bold/italic fonts) deferred — see deferrals below.
+- ✅ **Sound on auto-answer** — optional, gated by `sound_on_auto` config (default off). `MessageBeep(MB_OK)` when an auto-answer fires.
+
+### Help & docs
+- ✅ **Tooltips on welcome dialog** — hover help on every major control
+- ✅ **F2 hotkey hints overlay** — translucent panel listing all current bindings + fixed shortcuts
+- ✅ **README** with FAQ + troubleshooting + provider key links
+- ✅ **CONTRIBUTING.md** + **LICENSE** (MIT full text)
+- ✅ **File-based logger** at `logs/app.log` (info/warn/error with timestamps)
+- ✅ **Optional update check** — set `update_check_url` in config to a GitHub Releases API URL; on launch we fetch, compare `tag_name` to embedded version, show a one-shot notice if newer. Disabled by default.
 
 ### Distribution
-- ✅ **Embedded application icon** (32×32 PNG-in-ICO, "AI" mark on blue)
-- ✅ **Version + product metadata** in `overlay.exe` (FileVersion 2.1.0.0, ProductName, FileDescription, LegalCopyright) — visible in Windows file properties
+- ✅ Embedded application icon (PNG-in-ICO, "AI" mark on blue)
+- ✅ Version + product metadata in `overlay.exe` (FileVersion 2.3.0.0, ProductName, FileDescription, LegalCopyright) — visible in Windows file properties
+- ✅ **GitHub Actions build CI** (`.github/workflows/build.yml`) — builds on push/PR, uploads `project_app/` as artifact
 
 ---
 
@@ -144,94 +158,23 @@ Rebinding UI in the welcome screen has a **"Reset to defaults"** button.
 
 ---
 
-## 5. Roadmap
+## 5. Open work items
 
-Priorities are about **product completeness for shipping to non-developer users**, not technical interest.
+Real code tasks you can pick up. Sized so each fits in a focused session.
 
----
-
-### 🔴 CRITICAL — _all clear_ ✅
-
-All seven critical items completed in 2.1.0. See **Reliability**, **UI**, **Distribution** above for what landed. The user must still **rotate the historically-leaked API key** at https://aistudio.google.com/app/apikey — that's a manual action no code can do for them. The welcome screen now warns if the leaked key is in use, and the "Clear" button makes it one click to remove.
-
----
-
-### 🟠 HIGH — _all clear_ ✅
-
-All 14 HIGH items complete. Notable additions in the final wave:
-- **Audio device picker**: separate combos for output (loopback) and microphone in the welcome screen. AudioCapture enumerates active endpoints via `IMMDeviceEnumerator::EnumAudioEndpoints`, persists chosen IDs in `llm_config.txt`, and falls back to default if a saved device is no longer present.
-- **Per-message copy**: new `Ctrl+Shift+C` enters select mode (blue banner). Click any bubble to copy its text — strips `[tag]` prefixes from user bubbles, shows "Copied to clipboard" in the transcript bar, auto-exits. Esc cancels.
-- Click-through is now properly tri-state (off / move-mode / select-mode) with a single `UpdateClickThrough()` helper that flips `WS_EX_TRANSPARENT` based on the active mode.
-
----
-
-### 🟡 NORMAL — 11 / 18 complete
-
-The 11 completed items are listed in the Feature inventory above (Sessions & export, Appearance & personalization, Reliability). Seven remain, each with honest deferral rationale:
-
-| Item | Why deferred | Effort |
+| Item | What it gets you | Effort |
 |---|---|---|
-| **Multiple conversations / named sessions** | Significant new UI: session list, switcher, per-session chat files, naming. Real product feature, not polish. Better as its own focused wave. | 1 d |
-| **Edit / regenerate question** | Needs in-place text editing inside a bubble (no Win32 control hosting in current renderer) plus history-slicing logic to drop the old reply and re-fire. Touches rendering + state in non-trivial ways. | 3 h |
-| **Full syntax highlighting beyond brackets** | Real per-language token highlighting (keywords, strings, comments) needs at least minimal per-language lexers. Bracket pair colorization already solves the worst readability issue (nesting confusion). Diminishing returns vs. effort. | 1 d |
-| **Markdown rendering beyond code blocks** | Tables, headings, bullets, bold/italic. Requires a real markdown parser + significant OnPaint rework. Current `**bold**` etc. shows as literal markdown — works but unpolished. Defer until users complain. | 1–2 d |
-| **Hotkey rebinding for system keys** (INS, DEL, END, PgUp/Dn) | Rebindable hotkeys already cover the 7 semantic actions. Repurposing standard window keys (especially DEL = hide and END = exit) risks accidental data loss if users bind something destructive. Low value vs. risk. | 2 h |
-| **Sound effect on auto-answer** | Default-on would be obnoxious; default-off makes it discoverable only via a setting most users won't find. Better solved by the visible in-flight indicator we already have. | 1 h |
-| **Streaming auto-answer (single-call merge)** | Currently 2 calls (classifier + answer). Merging into 1 call with structured output is more complex and ~1 second faster in best case. The 2-call architecture is clearer to debug. Net win unclear. | 4 h |
-
-If you ship v1 and these become real pain points based on usage, that's a strong signal to revisit.
+| **Styled markdown rendering** (real bold/italic, not just stripping) | `**bold**` and `*italic*` render with bold/italic Segoe UI runs in prose. Needs manual word-wrap with mixed-font runs since `DrawText` doesn't handle that. | ~3 h |
+| **Per-message edit-and-resend** | Right-click (in select mode) a user bubble → edit text in an inline popup → resend, replacing the bot reply. Needs a small modal edit dialog + history-slicing. | ~3 h |
+| **Streaming auto-answer single-call merge** | Combine the classifier + answer into one streaming Gemini call. Parser splits TRANSCRIPT/ANSWER inline. Saves ~1s per auto-answer. | ~4 h |
+| **Unit tests for parsers** | Header-only test framework (doctest) wired into the build. Cover ExtractJsonStringField, DrainSSEBuffer, ColorizeBrackets, ParseSegments, BindingFromString. | ~1 d |
+| **Refactor `OverlayWindow.cpp`** | ~1500 lines today. Split into Rendering, Hotkeys, SendPaths, Persistence. Mechanical but reduces regression surface for future features. | ~3 h |
+| **Multiple conversations UI** | Today sessions exist as a single text field. Real picker would be a session-list panel + new/rename/delete buttons. | ~1 d |
+| **Full syntax highlighting** | Per-language lexers (currently pan-language keyword set). Detect language from the code fence label and use the right keyword/operator set. | ~1 d |
 
 ---
 
-### 🟢 LOW — polish
-
-| Item | Why it matters | Effort |
-|---|---|---|
-| **Auto-updater** | Check GitHub Releases on launch, download new builds. | 1 d |
-| **MSI installer** instead of zip | Optional but more "real product" feel. | 1 d |
-| **Tooltip help on hover** in welcome screen | Explain each field. | 1 h |
-| **Visual hotkey hints overlay** | Press-and-hold a key to flash a cheat sheet on screen. | 2 h |
-| **Cross-platform** (macOS / Linux) | Major rewrite — WASAPI, Win32, GDI+ all replaced. Whole separate project really. | 1+ months | - Not Now Skip this
-| **CONTRIBUTING.md, code of conduct** | If open-sourcing seriously. | 1 h |
-| **README screenshots / demo gif** | Make the GitHub page actually look like something. | 1 h |
-| **FAQ section in README** | Common questions: "is it detectable", "what data is sent", "cost per hour". | 1 h |
-| **Build CI** | GitHub Actions to build on push, attach binary to release. | 2 h |
-| **Unit tests for parsers** (JSON extract, SSE, hotkey serialization) | These are easy-to-test pure functions and have already had subtle bugs. | 1 d |
-| **Logging system** (structured, level-based, file output) | Better than `OutputDebugString` for diagnosing user-reported issues. | 3 h |
-| **Refactor `OverlayWindow.cpp` into smaller files** | It's >1000 lines now. Split rendering, hotkeys, audio glue, send paths. | 3 h |
-| **Extract magic numbers** to constants (timer IDs, hotkey IDs, font sizes, etc.) | Cleanup. | 1 h |
-| **Use string resources** instead of inline `L"..."` literals | Easier translation later. | 2 h |
-
----
-
-### 🚫 Explicitly out of scope (deferred or rejected)
-
-| Item | Why not |
-|---|---|
-| **Mobile / phone version** | Not the use case. Interviews happen on laptops. |
-| **In-overlay video capture** | Same use case is solved by screenshot + audio. |
-| **Local LLM via Whisper-only path** | We compared and Gemini multimodal beats local Whisper for quality and is far simpler. Local LLM is supported via the "Custom (OpenAI-compatible)" provider for Ollama users who want it. |
-| **GUI for raw config file editing** | `llm_config.txt` is small and self-explanatory; the welcome screen covers all of it. |
-| **Cloud-synced settings** | Single-user tool. No backend. |
-| **Plugin system** | Way too early. |
-
----
-
-## 6. Suggested order if you were going for v1.0 release
-
-Critical: done. HIGH: done. NORMAL: 11/18 done. The product is **past v1.0 quality** and is genuinely ready for the user's own use today. For public release, suggested path:
-
-1. **Real-world smoke test** in a mock interview — concrete feedback for the 7 deferred NORMAL items
-2. **README screenshots + GIF** (~1 h) — biggest legitimacy boost
-3. **Pick 1-2 deferred NORMAL items based on smoke-test feedback** — most likely candidates: multi-session, edit/regenerate, or markdown
-4. **LOW polish pass** (code signing, installer, auto-update) only if planning to distribute widely
-5. **Tag v2.2.0 → v1.0 marketing version**
-
-Everything in the LOW bucket is genuinely optional polish. You're done with the must-haves.
-
----
-
-## 7. Risks / open questions
+## 6. Risks / open questions
 
 - **API costs at scale.** If multiple users adopt and run auto mode all day, individual cost is fine (~$1/day heavy use). But that's per-user — you're not running the spend. Worth documenting expected cost in README.
 - **Detection by interview tooling.** `WDA_EXCLUDEFROMCAPTURE` works against standard screen capture but newer "proctoring" tools may use lower-level APIs (mirror driver, DRM-protected paths). Untested.

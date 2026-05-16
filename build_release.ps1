@@ -26,7 +26,7 @@ if (Test-Path "app.rc") {
 
 $resObj = ""
 if (Test-Path "app.res.o") { $resObj = "app.res.o" }
-$gppCommand = "g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp AudioCapture.cpp $resObj -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32 -lgdiplus -lcrypt32 -lole32 -lshell32"
+$gppCommand = "g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp AudioCapture.cpp Logger.cpp $resObj -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32 -lgdiplus -lcrypt32 -lole32 -lshell32"
 
 Write-Host "Running: $gppCommand"
 Invoke-Expression $gppCommand
@@ -34,6 +34,16 @@ Invoke-Expression $gppCommand
 if (-not (Test-Path $cppOutput)) {
     Write-Error "C++ Compilation failed. $cppOutput not created."
     exit 1
+}
+
+# Also build the test runner (separate console exe). Failure here is a soft warning.
+Write-Host "Building tests.exe..."
+$testCmd = "g++ tests.cpp -o tests.exe -std=c++17 -DUNICODE -D_UNICODE -static"
+Invoke-Expression $testCmd
+if (Test-Path "tests.exe") {
+    Write-Host "  ok - run .\tests.exe to execute"
+} else {
+    Write-Warning "  tests.exe did not build; continuing"
 }
 
 # 2. Package — write into project_app/ without nuking the directory, so a

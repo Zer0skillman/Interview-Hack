@@ -41,6 +41,7 @@ LLMConfig ConfigLoader::LoadConfig(const std::string& filepath) {
         else if (key == "restore_session") config.restore_session = (value == "1" || value == "true");
         else if (key == "session_name")    config.session_name = value;
         else if (key == "sound_on_auto")   config.sound_on_auto = (value == "1" || value == "true");
+        else if (key == "update_check_url") config.update_check_url = value;
         else if (key == "win_x")       config.win_x = std::atoi(value.c_str());
         else if (key == "win_y")       config.win_y = std::atoi(value.c_str());
         else if (key == "win_w")       config.win_w = std::atoi(value.c_str());
@@ -83,6 +84,7 @@ void ConfigLoader::SaveConfig(const std::string& filepath, const LLMConfig& conf
     file << "restore_session=" << (config.restore_session ? "1" : "0") << "\n";
     file << "session_name=" << config.session_name << "\n";
     file << "sound_on_auto=" << (config.sound_on_auto ? "1" : "0") << "\n";
+    if (!config.update_check_url.empty()) file << "update_check_url=" << config.update_check_url << "\n";
     if (config.win_w > 0 && config.win_h > 0) {
         file << "win_x=" << config.win_x << "\n";
         file << "win_y=" << config.win_y << "\n";

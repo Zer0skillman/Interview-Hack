@@ -479,6 +479,44 @@ void ConfigDialog::InitializeControls(HWND hwnd) {
     SendMessage(hSnd, BM_SETCHECK, s_config->sound_on_auto ? BST_CHECKED : BST_UNCHECKED, 0);
 
     OnProviderChanged(hwnd);
+
+    // ---- Tooltips on the major controls ----
+    INITCOMMONCONTROLSEX iccx{ sizeof(iccx), ICC_BAR_CLASSES };
+    InitCommonControlsEx(&iccx);
+    HWND hTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        hwnd, NULL, NULL, NULL);
+    if (hTip) {
+        SetWindowPos(hTip, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+        auto addTip = [&](int ctlId, LPCWSTR text) {
+            HWND ctl = GetDlgItem(hwnd, ctlId);
+            if (!ctl) return;
+            TOOLINFOW ti{};
+            ti.cbSize = sizeof(ti);
+            ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+            ti.hwnd = hwnd;
+            ti.uId = (UINT_PTR)ctl;
+            ti.lpszText = (LPWSTR)text;
+            SendMessageW(hTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 300);
+        };
+        addTip(ID_COMBO_PROVIDER,  L"Which LLM service to use. Only Gemini accepts audio.");
+        addTip(ID_COMBO_MODEL,     L"Model ID. Free-text — type any model name your provider supports.");
+        addTip(ID_EDIT_APIKEY,     L"API key from your provider's console (Google AI Studio, OpenAI, etc.). Stored locally.");
+        addTip(ID_BTN_CLEAR_KEY,   L"Erase the API key field.");
+        addTip(ID_EDIT_BASEURL,    L"Only for Custom provider. e.g. http://localhost:11434/v1 for Ollama.");
+        addTip(ID_EDIT_GEMINI_KEY, L"Optional — used when you pick a non-Gemini provider but still want F7/audio to work (routed via Gemini).");
+        addTip(ID_EDIT_SESSION,    L"Conversation history is saved to chat.<this name>.txt. Use different names for different topics.");
+        addTip(ID_CHK_MIC,         L"When checked, your microphone is also captured and mixed in. Off by default (interview use).");
+        addTip(ID_CHK_SOUND_AUTO,  L"Play a brief beep when auto-answer mode fires an answer.");
+        addTip(ID_COMBO_DEV_OUT,   L"Output device whose audio gets captured (system speakers normally).");
+        addTip(ID_COMBO_DEV_MIC,   L"Mic device used when 'Also capture microphone' is on.");
+        addTip(ID_BTN_RESET_KEYS,  L"Restore all rebindable hotkeys to their default bindings.");
+        addTip(ID_BTN_START,       L"Save settings and launch the overlay.");
+    }
 }
 
 std::string ConfigDialog::CurrentProviderId(HWND hwnd) {

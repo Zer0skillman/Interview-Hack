@@ -6,12 +6,30 @@
 #include <wincrypt.h>
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #include <shellapi.h>  // ShellExecuteW
+#include <winhttp.h>   // for the update-check GET
 
 // Forward-declaration so methods defined before this helper can call it
 static std::wstring SessionChatPath(const std::string& sessionName);
 
 const wchar_t* OverlayWindow::CLASS_NAME = L"InvisibleOverlayClass";
 const wchar_t* OverlayWindow::WINDOW_TITLE = L"Invisible Overlay";
+
+// ---- Named constants (formerly magic numbers) ----
+// Sentinel for "scroll to the bottom"; OnPaint clamps to actual max.
+static constexpr int kScrollToBottom    = 999999;
+// Background polling timer ID
+static constexpr UINT_PTR kPollTimerId  = 100;
+// Adaptive poll intervals
+static constexpr int kPollMsActive      = 3000;
+static constexpr int kPollMsSilent      = 8000;
+// Audio capture windows
+static constexpr int kAudioSendSeconds  = 30;   // F7 / F8 manual send
+static constexpr int kPollAudioSeconds  = 8;    // auto-mode poll snapshot
+// VAD threshold for "is someone speaking"
+static constexpr float kSpeechThreshold = 0.010f;
+// Hotkey ID ranges:
+//   1..HotkeyAction::Count       = user-configurable semantic hotkeys
+//   105..114                     = fixed UI shortcuts (Shift+arrows, F1, F2, F11, Ctrl combos)
 
 OverlayWindow::OverlayWindow() : m_hwnd(NULL), m_hInstance(NULL), m_scrollOffset(0), m_contentHeight(0)
 {
@@ -27,7 +45,7 @@ OverlayWindow::~OverlayWindow()
         }
         KillTimer(m_hwnd, 100);
         for (int id = 1; id <= (int)HotkeyAction::Count; ++id) UnregisterHotKey(m_hwnd, id);
-        for (int id = 100; id <= 113; ++id) UnregisterHotKey(m_hwnd, id);
+        for (int id = 100; id <= 114; ++id) UnregisterHotKey(m_hwnd, id);
     }
 }
 
@@ -104,6 +122,7 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
     RegisterHotKey(m_hwnd, 111, MOD_CONTROL, 'F');           // Ctrl+F search
     RegisterHotKey(m_hwnd, 112, 0, VK_F1);                   // F1 About
     RegisterHotKey(m_hwnd, 113, MOD_CONTROL | MOD_SHIFT, 'R'); // Ctrl+Shift+R regenerate last
+    RegisterHotKey(m_hwnd, 114, 0, VK_F2);                     // F2 hotkey hints overlay
 
     // User-configurable semantic hotkeys (IDs 1..Count, from config)
     RegisterConfigHotkeys();
@@ -130,10 +149,13 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
     if (m_config.restore_session) {
         LoadConversation();
         if (!m_messages.empty()) {
-            m_scrollOffset = 999999;
+            m_scrollOffset = kScrollToBottom;
             InvalidateRect(m_hwnd, NULL, TRUE);
         }
     }
+
+    // Fire-and-forget update check (no-op if no URL set)
+    CheckForUpdateAsync();
 
     // Polling timer for real-time transcription / auto-answer (5 seconds).
     // Fires only when provider is Gemini and a poll isn't already in flight.
@@ -202,6 +224,7 @@ LRESULT CALLBACK OverlayWindow::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, 
                 case 111: pThis->ToggleSearch(); return 0;
                 case 112: pThis->ShowAbout(); return 0;
                 case 113: pThis->RegenerateLastAnswer(); return 0;
+                case 114: pThis->ToggleHotkeyHints(); return 0;
             }
             // Configurable semantic hotkeys: ID = (HotkeyAction value) + 1
             int idx = (int)wParam - 1;
@@ -479,7 +502,7 @@ void OverlayWindow::UpdateFromClipboard()
 
             // User initiated — follow the answer down
             m_wasAtBottom = true;
-            m_scrollOffset = 999999;
+            m_scrollOffset = kScrollToBottom;
             m_inflightCalls++;
             InvalidateRect(m_hwnd, NULL, TRUE);
             
@@ -711,7 +734,7 @@ void OverlayWindow::HandlePollResult(const std::wstring& transcript, const std::
 
             TrimHistory();
             m_wasAtBottom = true;
-            m_scrollOffset = 999999;
+            m_scrollOffset = kScrollToBottom;
             m_inflightCalls++;
             changed = true;
 
@@ -763,7 +786,7 @@ static void DispatchAsk(
     self->TrimHistory();
     // User initiated this — they want to follow the answer
     wasAtBottom = true;
-    scrollOffset = 999999;
+    scrollOffset = kScrollToBottom;
     InvalidateRect(hwnd, NULL, TRUE);
 
     std::vector<LLMTurn> history;
@@ -813,7 +836,7 @@ void OverlayWindow::CaptureAudioOnly()
         ChatMessage bot; bot.isUser = false;
         bot.text = L"No audio captured yet. Play audio through your speakers and retry.";
         m_messages.push_back(bot);
-        m_scrollOffset = 999999;
+        m_scrollOffset = kScrollToBottom;
         InvalidateRect(m_hwnd, NULL, TRUE);
         return;
     }
@@ -827,7 +850,7 @@ void OverlayWindow::CaptureAudioOnly()
             ChatMessage bot; bot.isUser = false;
             bot.text = L"Audio needs Gemini. Set a 'Gemini fallback key' in settings, or switch provider.";
             m_messages.push_back(bot);
-            m_scrollOffset = 999999;
+            m_scrollOffset = kScrollToBottom;
             InvalidateRect(m_hwnd, NULL, TRUE);
             return;
         }
@@ -867,8 +890,104 @@ void OverlayWindow::TrimHistory()
 void OverlayWindow::RequestAutoScroll()
 {
     if (m_wasAtBottom) {
-        m_scrollOffset = 999999;
+        m_scrollOffset = kScrollToBottom;
     }
+}
+
+// Background HTTPS GET that compares "tag_name" from the response JSON to our
+// embedded version. If newer, posts a transcript-bar notice. Best-effort —
+// silently no-op on any error.
+static void DoUpdateCheck(HWND hwnd, std::string url) {
+    if (url.empty()) return;
+    if (url.rfind("https://", 0) != 0) return;  // require HTTPS
+
+    std::string body = url.substr(8);  // strip https://
+    size_t slash = body.find('/');
+    std::wstring host, path;
+    {
+        std::string hostPart = (slash == std::string::npos) ? body : body.substr(0, slash);
+        std::string pathPart = (slash == std::string::npos) ? "/" : body.substr(slash);
+        int n;
+        n = MultiByteToWideChar(CP_UTF8, 0, hostPart.data(), (int)hostPart.size(), NULL, 0);
+        host.resize(n);
+        MultiByteToWideChar(CP_UTF8, 0, hostPart.data(), (int)hostPart.size(), &host[0], n);
+        n = MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), NULL, 0);
+        path.resize(n);
+        MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), &path[0], n);
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.3.0 UpdateCheck",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return;
+    WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+
+    BOOL ok = WinHttpSendRequest(hRequest,
+        L"Accept: application/json\r\nUser-Agent: AIOverlay/2.3.0",
+        -1L, NULL, 0, 0, 0);
+    if (ok) ok = WinHttpReceiveResponse(hRequest, NULL);
+    std::string resp;
+    if (ok) {
+        DWORD avail = 0, downloaded = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+            std::vector<char> buf(avail + 1, 0);
+            if (!WinHttpReadData(hRequest, buf.data(), avail, &downloaded)) break;
+            resp.append(buf.data(), downloaded);
+            if (resp.size() > 200000) break;  // hard cap
+        }
+    }
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    // Find "tag_name":"vX.Y.Z" — keep this dumb; no JSON parser dep
+    size_t k = resp.find("\"tag_name\"");
+    if (k == std::string::npos) return;
+    k = resp.find('"', k + 11);
+    if (k == std::string::npos) return;
+    size_t end = resp.find('"', k + 1);
+    if (end == std::string::npos) return;
+    std::string tag = resp.substr(k + 1, end - k - 1);
+
+    // Compare to our own "2.3.0" semver. Strip leading v.
+    if (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) tag = tag.substr(1);
+    auto parseVer = [](const std::string& s, int& a, int& b, int& c) {
+        a = b = c = 0;
+        sscanf(s.c_str(), "%d.%d.%d", &a, &b, &c);
+    };
+    int ra, rb, rc, ma = 2, mb = 3, mc = 0;
+    parseVer(tag, ra, rb, rc);
+    bool newer = (ra > ma) || (ra == ma && rb > mb) || (ra == ma && rb == mb && rc > mc);
+    if (!newer) return;
+
+    std::wstring notice = L"Update available: v";
+    int n = MultiByteToWideChar(CP_UTF8, 0, tag.data(), (int)tag.size(), NULL, 0);
+    std::wstring wtag(n, 0);
+    MultiByteToWideChar(CP_UTF8, 0, tag.data(), (int)tag.size(), &wtag[0], n);
+    notice += wtag;
+
+    // Drop it into the transcript bar as a one-shot
+    std::wstring* heap = new std::wstring(notice);
+    PostMessage(hwnd, WM_POLL_RESULT, 0, (LPARAM)new std::pair<std::wstring, std::wstring>(*heap, std::wstring()));
+    delete heap;
+}
+
+void OverlayWindow::CheckForUpdateAsync()
+{
+    if (m_config.update_check_url.empty()) return;
+    HWND hwnd = m_hwnd;
+    std::string url = m_config.update_check_url;
+    std::thread([hwnd, url]() { DoUpdateCheck(hwnd, url); }).detach();
+}
+
+void OverlayWindow::ToggleHotkeyHints()
+{
+    m_hintsVisible = !m_hintsVisible;
+    InvalidateRect(m_hwnd, NULL, TRUE);
 }
 
 void OverlayWindow::RegenerateLastAnswer()
@@ -893,7 +1012,7 @@ void OverlayWindow::RegenerateLastAnswer()
     m_messages.back().hour = -1;
     m_messages.back().minute = -1;
     m_wasAtBottom = true;
-    m_scrollOffset = 999999;
+    m_scrollOffset = kScrollToBottom;
     InvalidateRect(m_hwnd, NULL, TRUE);
 
     std::vector<LLMTurn> history;
@@ -1153,7 +1272,7 @@ static void DEAD_REMOVED_BODY() {
     botMsg.isUser = false;
     m_messages.push_back(botMsg);
 
-    m_scrollOffset = 999999;
+    m_scrollOffset = kScrollToBottom;
     InvalidateRect(m_hwnd, NULL, TRUE);
 
     // Snapshot history before this turn
@@ -1303,8 +1422,14 @@ static const COLORREF kStringColor  = RGB(255, 170,  80);  // orange
 static const COLORREF kNumberColor  = RGB(120, 200, 255);  // cyan
 static const COLORREF kCommentColor = RGB(120, 140, 120);  // dim gray-green
 
+// Match a word against a fixed array of keywords
+static bool InSet(const std::wstring& w, const wchar_t* const* set, size_t count) {
+    for (size_t i = 0; i < count; ++i) if (w == set[i]) return true;
+    return false;
+}
+
+// Pan-language fallback (used when the code fence has no language label).
 static bool IsKeyword(const std::wstring& w) {
-    // Pan-language common keywords. Hardcoded to keep things simple.
     static const wchar_t* kw[] = {
         L"if", L"else", L"elif", L"for", L"while", L"do", L"switch", L"case",
         L"break", L"continue", L"return", L"default", L"goto", L"in", L"of", L"is", L"not", L"and", L"or",
@@ -1315,13 +1440,68 @@ static bool IsKeyword(const std::wstring& w) {
         L"true", L"false", L"null", L"nil", L"None", L"True", L"False", L"undefined",
         L"try", L"catch", L"finally", L"throw", L"throws", L"raise", L"except",
         L"async", L"await", L"yield", L"struct", L"enum", L"interface", L"type", L"impl",
-        L"auto", L"std", L"std::", L"size_t",
+        L"auto", L"std", L"size_t",
     };
-    for (auto* k : kw) if (w == k) return true;
-    return false;
+    return InSet(w, kw, sizeof(kw) / sizeof(kw[0]));
 }
 
-static std::vector<COLORREF> ColorizeBrackets(const std::wstring& code) {
+// Per-language keyword check. Falls back to IsKeyword() when language is empty
+// or unknown.
+static bool IsKeywordInLang(const std::wstring& w, const std::wstring& lang) {
+    if (lang.empty()) return IsKeyword(w);
+
+    std::wstring lk;
+    for (wchar_t c : lang) lk += (wchar_t)towlower(c);
+
+    static const wchar_t* py[] = {
+        L"if", L"elif", L"else", L"for", L"while", L"break", L"continue",
+        L"def", L"class", L"return", L"yield", L"import", L"from", L"as",
+        L"try", L"except", L"finally", L"raise", L"with", L"lambda",
+        L"True", L"False", L"None", L"and", L"or", L"not", L"in", L"is",
+        L"pass", L"global", L"nonlocal", L"async", L"await",
+    };
+    static const wchar_t* js[] = {
+        L"var", L"let", L"const", L"function", L"return", L"if", L"else", L"for", L"while",
+        L"do", L"switch", L"case", L"default", L"break", L"continue", L"class", L"extends",
+        L"new", L"this", L"typeof", L"instanceof", L"in", L"of", L"async", L"await",
+        L"try", L"catch", L"finally", L"throw", L"true", L"false", L"null", L"undefined",
+        L"import", L"export", L"from", L"as", L"interface", L"type", L"enum", L"namespace",
+    };
+    static const wchar_t* c_family[] = {
+        L"if", L"else", L"for", L"while", L"do", L"switch", L"case", L"default", L"break",
+        L"continue", L"return", L"goto", L"class", L"struct", L"enum", L"union", L"public",
+        L"private", L"protected", L"static", L"virtual", L"override", L"final", L"abstract",
+        L"new", L"delete", L"this", L"super", L"void", L"int", L"char", L"float", L"double",
+        L"bool", L"long", L"short", L"unsigned", L"signed", L"const", L"volatile", L"auto",
+        L"true", L"false", L"null", L"nullptr", L"namespace", L"using", L"typedef",
+        L"try", L"catch", L"throw", L"throws", L"template", L"typename", L"sizeof",
+    };
+    static const wchar_t* rust[] = {
+        L"fn", L"let", L"mut", L"if", L"else", L"for", L"while", L"loop", L"match",
+        L"return", L"break", L"continue", L"struct", L"enum", L"impl", L"trait",
+        L"pub", L"use", L"mod", L"crate", L"self", L"Self", L"as", L"in", L"where",
+        L"const", L"static", L"true", L"false", L"None", L"Some", L"Ok", L"Err",
+        L"async", L"await", L"move", L"ref", L"dyn", L"box",
+    };
+    static const wchar_t* go[] = {
+        L"func", L"var", L"const", L"type", L"struct", L"interface", L"if", L"else",
+        L"for", L"range", L"switch", L"case", L"default", L"break", L"continue",
+        L"return", L"go", L"select", L"chan", L"defer", L"map", L"package", L"import",
+        L"nil", L"true", L"false", L"iota",
+    };
+
+    if (lk == L"py"   || lk == L"python")                                 return InSet(w, py,       sizeof(py)/sizeof(*py));
+    if (lk == L"js"   || lk == L"javascript" || lk == L"jsx"
+        || lk == L"ts" || lk == L"typescript" || lk == L"tsx")            return InSet(w, js,       sizeof(js)/sizeof(*js));
+    if (lk == L"c"    || lk == L"cpp" || lk == L"c++" || lk == L"cxx"
+        || lk == L"java" || lk == L"cs"  || lk == L"csharp" || lk == L"c#") return InSet(w, c_family, sizeof(c_family)/sizeof(*c_family));
+    if (lk == L"rust" || lk == L"rs")                                     return InSet(w, rust,     sizeof(rust)/sizeof(*rust));
+    if (lk == L"go"   || lk == L"golang")                                 return InSet(w, go,       sizeof(go)/sizeof(*go));
+
+    return IsKeyword(w);  // unknown language → pan-language fallback
+}
+
+static std::vector<COLORREF> ColorizeBrackets(const std::wstring& code, const std::wstring& language = std::wstring()) {
     std::vector<COLORREF> out(code.size(), kDefaultCodeColor);
     std::vector<int> stack;
     int depth = 0;
@@ -1402,7 +1582,7 @@ static std::vector<COLORREF> ColorizeBrackets(const std::wstring& code) {
             size_t start = i;
             while (i < code.size() && (iswalnum(code[i]) || code[i] == L'_')) i++;
             std::wstring word = code.substr(start, i - start);
-            if (IsKeyword(word)) {
+            if (IsKeywordInLang(word, language)) {
                 for (size_t k = start; k < i; ++k) out[k] = kKeywordColor;
             }
             continue;
@@ -1412,6 +1592,119 @@ static std::vector<COLORREF> ColorizeBrackets(const std::wstring& code) {
     }
     return out;
 }
+// Quick check: does the prose contain any markdown markers worth rendering styled?
+static bool HasInlineMd(const std::wstring& s) {
+    return s.find(L"**") != std::wstring::npos
+        || s.find(L"*")  != std::wstring::npos
+        || s.find(L"_")  != std::wstring::npos
+        || s.find(L"`")  != std::wstring::npos;
+}
+
+// Parse prose into runs of {text, bold, italic}. Asterisks/underscores adjacent
+// to alphanumerics are treated as literal (so a*b and snake_case survive).
+struct MdRun { std::wstring text; bool bold; bool italic; };
+static std::vector<MdRun> ParseMdRuns(const std::wstring& s) {
+    std::vector<MdRun> out;
+    bool bold = false, italic = false;
+    std::wstring buf;
+    auto flush = [&]() {
+        if (!buf.empty()) {
+            out.push_back({ buf, bold, italic });
+            buf.clear();
+        }
+    };
+    size_t i = 0;
+    while (i < s.size()) {
+        wchar_t c = s[i];
+        if (c == L'*' && i + 1 < s.size() && s[i+1] == L'*') {
+            flush(); bold = !bold; i += 2; continue;
+        }
+        if (c == L'*' || c == L'_') {
+            bool prevAlnum = (i > 0) && (iswalnum(s[i-1]) || s[i-1] == L'_');
+            bool nextAlnum = (i + 1 < s.size()) && (iswalnum(s[i+1]) || s[i+1] == L'_');
+            if (!(prevAlnum && nextAlnum)) {
+                flush(); italic = !italic; i++; continue;
+            }
+        }
+        if (c == L'`') { i++; continue; }  // inline code marker — stripped
+        buf += c;
+        i++;
+    }
+    flush();
+    return out;
+}
+
+// Word-wrap layout with mixed fonts. Returns (width, height) used. If `draw`,
+// emits TextOut calls — otherwise just measures via GetTextExtentPoint32.
+//
+// fonts indexed by (bold<<0 | italic<<1): 0=plain, 1=bold, 2=italic, 3=bold+italic.
+struct MdLayoutResult { int width; int height; };
+static MdLayoutResult LayoutMd(
+    HDC hdc, const std::vector<MdRun>& runs,
+    int xStart, int yStart, int maxWidth, int lineH,
+    HFONT fonts[4], COLORREF textColor, bool draw)
+{
+    int x = xStart;
+    int y = yStart;
+    int maxX = xStart;
+    bool anyDrawn = false;
+
+    for (const auto& run : runs) {
+        int idx = (run.bold ? 1 : 0) | (run.italic ? 2 : 0);
+        SelectObject(hdc, fonts[idx]);
+        if (draw) SetTextColor(hdc, textColor);
+
+        size_t i = 0;
+        while (i < run.text.size()) {
+            // Skip and emit any non-newline whitespace (preserve spaces inline)
+            size_t ws = i;
+            while (i < run.text.size() && iswspace(run.text[i])) {
+                if (run.text[i] == L'\n') {
+                    if (i > ws) {
+                        std::wstring sp = run.text.substr(ws, i - ws);
+                        SIZE spSz; GetTextExtentPoint32W(hdc, sp.c_str(), (int)sp.size(), &spSz);
+                        if (draw && x > xStart) TextOutW(hdc, x, y, sp.c_str(), (int)sp.size());
+                        x += spSz.cx;
+                        if (x > maxX) maxX = x;
+                    }
+                    x = xStart;
+                    y += lineH;
+                    ws = i + 1;
+                }
+                i++;
+            }
+            if (i > ws) {
+                std::wstring sp = run.text.substr(ws, i - ws);
+                if (!sp.empty() && x > xStart) {
+                    SIZE spSz; GetTextExtentPoint32W(hdc, sp.c_str(), (int)sp.size(), &spSz);
+                    if (draw) TextOutW(hdc, x, y, sp.c_str(), (int)sp.size());
+                    x += spSz.cx;
+                }
+            }
+
+            // Collect next word (non-whitespace)
+            size_t wstart = i;
+            while (i < run.text.size() && !iswspace(run.text[i])) i++;
+            if (i > wstart) {
+                std::wstring word = run.text.substr(wstart, i - wstart);
+                SIZE sz; GetTextExtentPoint32W(hdc, word.c_str(), (int)word.size(), &sz);
+                if (x + sz.cx > xStart + maxWidth && x > xStart) {
+                    x = xStart;
+                    y += lineH;
+                }
+                if (draw) {
+                    TextOutW(hdc, x, y, word.c_str(), (int)word.size());
+                    anyDrawn = true;
+                }
+                x += sz.cx;
+                if (x > maxX) maxX = x;
+            }
+        }
+    }
+    (void)anyDrawn;
+    return { maxX - xStart, (y - yStart) + lineH };
+}
+
 // Strip markdown inline markers (**, *, _, `) from prose for display.
 // Keep the source text in m_messages intact so history sent to the API preserves
 // the original markdown.
@@ -1512,11 +1805,25 @@ void OverlayWindow::OnPaint(HWND hwnd)
         m_config.font_size_prose, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+    HFONT hProseBold = CreateFont(
+        m_config.font_size_prose, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+    HFONT hProseItalic = CreateFont(
+        m_config.font_size_prose, 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+    HFONT hProseBoldIt = CreateFont(
+        m_config.font_size_prose, 0, 0, 0, FW_BOLD, TRUE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
     HFONT hCodeFont = CreateFont(
         m_config.font_size_code, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
     HFONT hOldFont = (HFONT)SelectObject(hdc, hProseFont);
+
+    HFONT proseFonts[4] = { hProseFont, hProseBold, hProseItalic, hProseBoldIt };
 
     HBRUSH hUserBrush = CreateSolidBrush(theme.user_bubble);
     HBRUSH hBotBrush  = CreateSolidBrush(theme.bot_bubble);
@@ -1548,7 +1855,12 @@ void OverlayWindow::OnPaint(HWND hwnd)
     TEXTMETRIC codeTm;
     GetTextMetrics(hdc, &codeTm);
     int codeLineH = codeTm.tmHeight + 2;
+
+    // Measure prose line height for the styled-markdown layout
     SelectObject(hdc, hProseFont);
+    TEXTMETRIC proseTm;
+    GetTextMetrics(hdc, &proseTm);
+    int proseLineH = proseTm.tmHeight + 2;
 
     // -------- Measure pass --------
     struct MeasuredMsg {
@@ -1576,7 +1888,7 @@ void OverlayWindow::OnPaint(HWND hwnd)
             if (seg.isCode) {
                 // Code: monospace, no word-wrap, line-by-line
                 auto lines  = SplitLines(seg.text);
-                auto colors = ColorizeBrackets(seg.text);
+                auto colors = ColorizeBrackets(seg.text, seg.language);
                 int maxLineChars = 0;
                 for (const auto& ln : lines) {
                     if ((int)ln.size() > maxLineChars) maxLineChars = (int)ln.size();
@@ -1590,14 +1902,23 @@ void OverlayWindow::OnPaint(HWND hwnd)
                 mm.codeLines.push_back(std::move(lines));
                 mm.codeColors.push_back(std::move(colors));
             } else {
-                // Prose: word-wrapped at proseMaxInner. Strip inline markdown markers for display.
-                SelectObject(hdc, hProseFont);
-                std::wstring shown = StripInlineMd(seg.text);
-                RECT r = { 0, 0, proseMaxInner, 0 };
-                DrawText(hdc, shown.c_str(), -1, &r,
-                         DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                int sw = r.right - r.left;
-                int sh = r.bottom - r.top;
+                // Prose: prefer styled-markdown layout when markers are present;
+                // fall back to fast DrawText for plain text.
+                int sw, sh;
+                if (HasInlineMd(seg.text)) {
+                    auto runs = ParseMdRuns(seg.text);
+                    auto res = LayoutMd(hdc, runs, 0, 0, proseMaxInner, proseLineH,
+                                        proseFonts, RGB(255,255,255), false);
+                    sw = res.width;
+                    sh = res.height;
+                } else {
+                    SelectObject(hdc, hProseFont);
+                    RECT r = { 0, 0, proseMaxInner, 0 };
+                    DrawText(hdc, seg.text.c_str(), -1, &r,
+                             DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                    sw = r.right - r.left;
+                    sh = r.bottom - r.top;
+                }
                 mm.segHeights.push_back(sh);
                 if (sw > mm.innerW) mm.innerW = sw;
                 innerH += sh;
@@ -1726,12 +2047,17 @@ void OverlayWindow::OnPaint(HWND hwnd)
                     SelectClipRgn(hdc, NULL);
                     DeleteObject(clip);
                 } else {
-                    SelectObject(hdc, hProseFont);
-                    SetTextColor(hdc, theme.prose_text);
-                    std::wstring shown = StripInlineMd(seg.text);
-                    RECT tr = { segLeft, segY, segRight, segY + sh };
-                    DrawText(hdc, shown.c_str(), -1, &tr,
-                             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+                    if (HasInlineMd(seg.text)) {
+                        auto runs = ParseMdRuns(seg.text);
+                        LayoutMd(hdc, runs, segLeft, segY, segRight - segLeft, proseLineH,
+                                 proseFonts, theme.prose_text, true);
+                    } else {
+                        SelectObject(hdc, hProseFont);
+                        SetTextColor(hdc, theme.prose_text);
+                        RECT tr = { segLeft, segY, segRight, segY + sh };
+                        DrawText(hdc, seg.text.c_str(), -1, &tr,
+                                 DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+                    }
                 }
 
                 segY += sh + segGap;
@@ -1772,6 +2098,70 @@ void OverlayWindow::OnPaint(HWND hwnd)
         RECT srTr = { 10, 4, width - 10, 22 };
         DrawText(hdc, shown.c_str(), -1, &srTr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
         DeleteObject(hSearchFont);
+    }
+
+    // -------- Hotkey hints overlay (F2) --------
+    if (m_hintsVisible) {
+        const int panelW = std::min(width - 40, 320);
+        const int panelH = std::min(fullHeight - 80, 360);
+        int px = (width - panelW) / 2;
+        int py = (fullHeight - panelH) / 2;
+
+        HBRUSH hPanelBg = CreateSolidBrush(RGB(15, 15, 20));
+        HBRUSH oldB = (HBRUSH)SelectObject(hdc, hPanelBg);
+        RoundRect(hdc, px, py, px + panelW, py + panelH, 8, 8);
+        SelectObject(hdc, oldB);
+        DeleteObject(hPanelBg);
+
+        HFONT hHdr = CreateFont(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+        SelectObject(hdc, hHdr);
+        SetTextColor(hdc, RGB(120, 200, 255));
+        RECT hr = { px + 14, py + 10, px + panelW - 10, py + 30 };
+        DrawText(hdc, L"Hotkeys (F2 to close)", -1, &hr,
+                 DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+        DeleteObject(hHdr);
+
+        HFONT hRow = CreateFont(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+        SelectObject(hdc, hRow);
+        SetTextColor(hdc, RGB(220, 220, 220));
+
+        int ly = py + 36;
+        for (int i = 0; i < (int)HotkeyAction::Count; ++i) {
+            std::wstring line = std::wstring(L"  ");
+            std::string b = ConfigLoader::BindingToString(m_config.hotkeys.bindings[i]);
+            std::string lbl = ConfigLoader::ActionLabel((HotkeyAction)i);
+            // pad binding to 14 chars
+            while ((int)b.size() < 14) b += ' ';
+            std::string row = "  " + b + lbl;
+            int sz = MultiByteToWideChar(CP_UTF8, 0, row.data(), (int)row.size(), NULL, 0);
+            std::wstring wrow(sz, 0);
+            MultiByteToWideChar(CP_UTF8, 0, row.data(), (int)row.size(), &wrow[0], sz);
+            RECT lr = { px + 14, ly, px + panelW - 10, ly + 16 };
+            DrawText(hdc, wrow.c_str(), -1, &lr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+            ly += 16;
+        }
+        // Fixed shortcuts
+        const wchar_t* fixed[] = {
+            L"  F1            About",
+            L"  F2            This panel",
+            L"  F11           Runtime settings",
+            L"  Ctrl+E        Export chat to .md",
+            L"  Ctrl+F        Search chat",
+            L"  Ctrl+= / -    Font size",
+            L"  Ctrl+Shift+R  Regenerate last answer",
+            L"  Shift+← / →   Scroll code horizontally",
+        };
+        ly += 4;
+        for (auto* l : fixed) {
+            RECT lr = { px + 14, ly, px + panelW - 10, ly + 16 };
+            DrawText(hdc, l, -1, &lr, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+            ly += 16;
+        }
+        DeleteObject(hRow);
     }
 
     // -------- Mode banner (move OR select) --------
@@ -1886,6 +2276,9 @@ void OverlayWindow::OnPaint(HWND hwnd)
     DeleteObject(hCodeBrush);
     DeleteObject(hNullPen);
     DeleteObject(hProseFont);
+    DeleteObject(hProseBold);
+    DeleteObject(hProseItalic);
+    DeleteObject(hProseBoldIt);
     DeleteObject(hCodeFont);
 
     EndPaint(hwnd, &ps);

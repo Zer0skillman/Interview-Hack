@@ -6,6 +6,7 @@
 #include "OverlayWindow.h"
 #include "ConfigLoader.h"
 #include "ConfigDialog.h"
+#include "Logger.h"
 
 #include <commctrl.h>
 #pragma comment(lib, "comctl32.lib")
@@ -40,6 +41,7 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     SetUnhandledExceptionFilter(CrashFilter);
+    Logger::Info("startup v2.3.0");
 
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
