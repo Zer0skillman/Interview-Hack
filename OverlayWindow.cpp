@@ -11,6 +11,95 @@
 // Forward-declaration so methods defined before this helper can call it
 static std::wstring SessionChatPath(const std::string& sessionName);
 
+// Modal edit dialog used by "edit and resend last user message".
+namespace {
+struct EditDlgState {
+    std::wstring currentText;
+    std::wstring resultText;
+    bool ok = false;
+};
+static EditDlgState* s_editDlgState = nullptr;
+}
+
+static LRESULT CALLBACK EditDlgProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    switch (msg) {
+    case WM_CREATE: {
+        HFONT hFont = CreateFont(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+            DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        HWND hEdit = CreateWindow(L"EDIT",
+            s_editDlgState ? s_editDlgState->currentText.c_str() : L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL
+              | ES_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP,
+            10, 10, 480, 220, hwnd, (HMENU)100, NULL, NULL);
+        SendMessage(hEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
+        HWND hOk = CreateWindow(L"BUTTON", L"Resend",
+            WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON | WS_TABSTOP,
+            300, 240, 100, 28, hwnd, (HMENU)101, NULL, NULL);
+        SendMessage(hOk, WM_SETFONT, (WPARAM)hFont, TRUE);
+        HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
+            WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+            410, 240, 80, 28, hwnd, (HMENU)102, NULL, NULL);
+        SendMessage(hCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SetFocus(hEdit);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(w) == 101 && s_editDlgState) {
+            HWND hEdit = GetDlgItem(hwnd, 100);
+            int len = GetWindowTextLength(hEdit);
+            std::vector<wchar_t> buf(len + 1, 0);
+            GetWindowText(hEdit, buf.data(), len + 1);
+            s_editDlgState->resultText = buf.data();
+            s_editDlgState->ok = true;
+            DestroyWindow(hwnd);
+        } else if (LOWORD(w) == 102) {
+            DestroyWindow(hwnd);
+        }
+        return 0;
+    case WM_CLOSE:    DestroyWindow(hwnd); return 0;
+    case WM_DESTROY:  PostQuitMessage(0);   return 0;
+    }
+    return DefWindowProc(hwnd, msg, w, l);
+}
+
+static bool ShowEditDialog(HINSTANCE hInst, HWND owner, const std::wstring& current, std::wstring& outText) {
+    EditDlgState st;
+    st.currentText = current;
+    s_editDlgState = &st;
+
+    WNDCLASS wc = {0};
+    wc.lpfnWndProc = EditDlgProc;
+    wc.hInstance = hInst;
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    wc.lpszClassName = L"OverlayEditDlg";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    WNDCLASSEX wcex;
+    if (!GetClassInfoEx(hInst, wc.lpszClassName, &wcex)) RegisterClass(&wc);
+
+    int sw = GetSystemMetrics(SM_CXSCREEN);
+    int sh = GetSystemMetrics(SM_CYSCREEN);
+    int w = 510, h = 310;
+    HWND dhwnd = CreateWindow(wc.lpszClassName, L"Edit message and resend",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        (sw - w) / 2, (sh - h) / 2, w, h,
+        owner, NULL, hInst, NULL);
+    if (!dhwnd) { s_editDlgState = nullptr; return false; }
+
+    MSG msg = {0};
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        if (!IsDialogMessage(dhwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    bool ok = st.ok;
+    if (ok) outText = st.resultText;
+    s_editDlgState = nullptr;
+    return ok;
+}
+
 const wchar_t* OverlayWindow::CLASS_NAME = L"InvisibleOverlayClass";
 const wchar_t* OverlayWindow::WINDOW_TITLE = L"Invisible Overlay";
 

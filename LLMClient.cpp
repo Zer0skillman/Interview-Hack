@@ -129,6 +129,7 @@ void LLMClient::GenerateContentStreaming(
 }
 
 std::string LLMClient::BuildGeminiRequestBody(
+    const std::wstring& systemPrompt,
     const std::wstring& userMessage,
     const std::vector<LLMTurn>& history,
     const std::string& pngBase64,
@@ -136,7 +137,7 @@ std::string LLMClient::BuildGeminiRequestBody(
 {
     std::ostringstream body;
     body << "{\"systemInstruction\":{\"parts\":[{\"text\":\"";
-    body << JsonEscapeUtf8(WideToUtf8(SYSTEM_PROMPT));
+    body << JsonEscapeUtf8(WideToUtf8(systemPrompt));
     body << "\"}]},\"generationConfig\":{\"temperature\":0.7},\"contents\":[";
 
     bool first = true;
@@ -174,7 +175,7 @@ std::wstring LLMClient::CallGemini(
     const std::string& pngBase64,
     const std::string& wavBase64)
 {
-    std::string body = BuildGeminiRequestBody(userMessage, history, pngBase64, wavBase64);
+    std::string body = BuildGeminiRequestBody(SYSTEM_PROMPT, userMessage, history, pngBase64, wavBase64);
 
     std::wstring path = L"/v1beta/models/" + Utf8ToWide(config.model) + L":generateContent";
     std::wstring headers = L"Content-Type: application/json\r\nx-goog-api-key: "
@@ -471,7 +472,7 @@ void LLMClient::CallGeminiStreaming(
     const std::string& wavBase64,
     LLMStreamCallback onChunk)
 {
-    std::string body = BuildGeminiRequestBody(userMessage, history, pngBase64, wavBase64);
+    std::string body = BuildGeminiRequestBody(SYSTEM_PROMPT, userMessage, history, pngBase64, wavBase64);
 
     std::wstring path = L"/v1beta/models/" + Utf8ToWide(config.model)
                       + L":streamGenerateContent?alt=sse";
@@ -961,6 +962,186 @@ void LLMClient::CallAnthropicStreaming(
 
     if (incomplete) onChunk(L"\n\n[stream cut off — network error]", true);
     else            onChunk(L"", true);
+}
+
+// -----------------------------------------------------------------------------
+// Single-call merged classifier + answer (streaming)
+// -----------------------------------------------------------------------------
+
+static const wchar_t* CLASSIFY_AND_ANSWER_PROMPT =
+    L"You receive a few seconds of audio from the user's meeting. Output EXACTLY this format:\n"
+    L"TRANSCRIPT: <one-line transcript of the speech>\n"
+    L"ANSWER: <answer | NONE>\n\n"
+    L"The ANSWER content must be either:\n"
+    L"- The literal word NONE if the audio is greetings, small talk, behavioral, the user "
+    L"themselves talking, silence, music, or unclear.\n"
+    L"- A complete, helpful answer ONLY if the audio contains a substantive technical question "
+    L"that an interviewee would benefit from answering (coding problem, concept explanation, "
+    L"complexity, tradeoffs).\n"
+    L"For coding answers, give working code inside a ```code block``` then a one-line why.\n"
+    L"Output nothing else. No preamble, no commentary.";
+
+// State machine that splits a merged Gemini text stream into the TRANSCRIPT line
+// and the ANSWER stream. Buffers internally; emits to callbacks when complete.
+namespace {
+struct MergedParser {
+    enum State { LookingForTranscript, BufferingTranscript, LookingForAnswer,
+                 CheckingNone, StreamingAnswer, Done };
+    State state = LookingForTranscript;
+    std::wstring acc;
+    bool transcriptEmitted = false;
+    std::function<void(const std::wstring&)> onTranscript;
+    LLMStreamCallback onAnswerChunk;
+
+    void Feed(const std::wstring& chunk) {
+        acc += chunk;
+        Process();
+    }
+
+    void Process() {
+        while (state != Done) {
+            if (state == LookingForTranscript) {
+                size_t p = acc.find(L"TRANSCRIPT:");
+                if (p == std::wstring::npos) {
+                    if (acc.size() > 200) acc = acc.substr(acc.size() - 200);
+                    return;
+                }
+                acc.erase(0, p + 11);
+                state = BufferingTranscript;
+            }
+            if (state == BufferingTranscript) {
+                size_t nl  = acc.find(L'\n');
+                size_t ans = acc.find(L"ANSWER:");
+                if (nl == std::wstring::npos && ans == std::wstring::npos) return;
+                size_t end = std::wstring::npos;
+                if (ans != std::wstring::npos) end = ans;
+                if (nl != std::wstring::npos && (end == std::wstring::npos || nl < end)) end = nl;
+
+                std::wstring t = acc.substr(0, end);
+                while (!t.empty() && (t.front() == L' ' || t.front() == L'\t')) t.erase(0, 1);
+                while (!t.empty() && (t.back()  == L'\n' || t.back()  == L'\r'
+                                   || t.back()  == L' '  || t.back()  == L'\t')) t.pop_back();
+
+                if (!transcriptEmitted && !t.empty()) {
+                    onTranscript(t);
+                    transcriptEmitted = true;
+                }
+                acc.erase(0, end);
+                state = LookingForAnswer;
+            }
+            if (state == LookingForAnswer) {
+                size_t p = acc.find(L"ANSWER:");
+                if (p == std::wstring::npos) return;
+                acc.erase(0, p + 7);
+                while (!acc.empty() && (acc.front() == L' ' || acc.front() == L'\t')) acc.erase(0, 1);
+                state = CheckingNone;
+            }
+            if (state == CheckingNone) {
+                if (acc.size() < 5) return;  // need NONE\X or first chars of real answer
+                if (acc.compare(0, 4, L"NONE") == 0 &&
+                    (acc.size() == 4 || !iswalnum(acc[4]))) {
+                    state = Done;
+                    return;
+                }
+                onAnswerChunk(acc, false);
+                acc.clear();
+                state = StreamingAnswer;
+            }
+            if (state == StreamingAnswer) {
+                if (!acc.empty()) {
+                    onAnswerChunk(acc, false);
+                    acc.clear();
+                }
+                return;
+            }
+        }
+    }
+
+    void Finalize() {
+        if (state == StreamingAnswer && !acc.empty()) {
+            onAnswerChunk(acc, false);
+            acc.clear();
+        }
+        // Always tell the caller the stream is over so they can finalize the bubble.
+        onAnswerChunk(L"", true);
+    }
+};
+}  // namespace
+
+void LLMClient::ClassifyAndAnswerStreaming(
+    const std::string& wavBase64,
+    const LLMConfig& config,
+    std::function<void(const std::wstring&)> onTranscript,
+    LLMStreamCallback onAnswerChunk)
+{
+    if (wavBase64.empty() || config.api_key.empty()) { onAnswerChunk(L"", true); return; }
+    if (config.provider != "gemini" && !config.provider.empty()) { onAnswerChunk(L"", true); return; }
+
+    MergedParser parser;
+    parser.onTranscript = onTranscript;
+    parser.onAnswerChunk = onAnswerChunk;
+
+    // Build request body (one-shot — no history, audio only)
+    std::vector<LLMTurn> empty;
+    std::string body = BuildGeminiRequestBody(
+        CLASSIFY_AND_ANSWER_PROMPT,
+        L"Process the attached audio per your instructions.",
+        empty, std::string(), wavBase64);
+
+    std::wstring path = L"/v1beta/models/" + Utf8ToWide(config.model)
+                      + L":streamGenerateContent?alt=sse";
+    std::wstring headers = L"Content-Type: application/json\r\nx-goog-api-key: "
+                         + Utf8ToWide(config.api_key);
+
+    // Reuse the same WinHTTP streaming pattern as CallGeminiStreaming.
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.3.0 Merged",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) { parser.Finalize(); return; }
+    WinHttpSetTimeouts(hSession, 5000, 10000, 30000, 60000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession,
+        L"generativelanguage.googleapis.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); parser.Finalize(); return; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(),
+        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); parser.Finalize(); return; }
+
+    BOOL ok = WinHttpSendRequest(hRequest,
+        headers.c_str(), (DWORD)headers.length(),
+        (LPVOID)body.c_str(), (DWORD)body.length(),
+        (DWORD)body.length(), 0);
+    if (ok) ok = WinHttpReceiveResponse(hRequest, NULL);
+    if (!ok) {
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        parser.Finalize();
+        return;
+    }
+
+    // Wrap the existing DrainSSEBuffer pattern. Each text chunk it extracts is
+    // fed to the parser instead of straight to the user's onChunk.
+    LLMStreamCallback chunkSink = [&parser](const std::wstring& text, bool /*isFinal*/) {
+        if (!text.empty()) parser.Feed(text);
+    };
+
+    std::string buffer;
+    bool aborted = false;
+    DWORD dwSize = 0, dwDownloaded = 0;
+    do {
+        dwSize = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+        if (dwSize == 0) break;
+        std::vector<char> chunk(dwSize + 1, 0);
+        if (!WinHttpReadData(hRequest, chunk.data(), dwSize, &dwDownloaded)) break;
+        buffer.append(chunk.data(), dwDownloaded);
+        DrainSSEBuffer(buffer, chunkSink, aborted);
+    } while (dwSize > 0 && !aborted);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    parser.Finalize();
 }
 
 std::string LLMClient::JsonEscapeUtf8(const std::string& utf8) {

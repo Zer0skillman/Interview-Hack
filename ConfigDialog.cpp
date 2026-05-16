@@ -234,6 +234,26 @@ LRESULT CALLBACK ConfigDialog::DialogProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             SetWindowTextW(GetDlgItem(hwnd, ID_EDIT_APIKEY), L"");
             SetFocus(GetDlgItem(hwnd, ID_EDIT_APIKEY));
         }
+        if (cmd == ID_BTN_DEL_SESSION) {
+            // Get current session name from combo, delete its chat file, switch to default
+            HWND hSess = GetDlgItem(hwnd, ID_EDIT_SESSION);
+            char buf[256] = {0};
+            GetWindowTextA(hSess, buf, sizeof(buf));
+            std::string sn = buf;
+            if (!sn.empty() && sn != "default") {
+                std::wstring prompt = L"Delete session '" + Utf8To16(sn) + L"' and its chat history?";
+                if (MessageBoxW(hwnd, prompt.c_str(), L"Delete session", MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
+                    std::wstring path = L"chat." + Utf8To16(sn) + L".txt";
+                    DeleteFileW(path.c_str());
+                    // Remove from combo + reset selection to default
+                    int idx = (int)SendMessageW(hSess, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)Utf8To16(sn).c_str());
+                    if (idx != CB_ERR) SendMessage(hSess, CB_DELETESTRING, idx, 0);
+                    SetWindowTextA(hSess, "default");
+                }
+            } else {
+                MessageBoxW(hwnd, L"The 'default' session can't be deleted.", L"Delete session", MB_ICONINFORMATION | MB_OK);
+            }
+        }
         if (cmd == ID_BTN_RESET_KEYS) {
             s_config->hotkeys = ConfigLoader::DefaultHotkeys();
             // Refresh each rebind button's label
@@ -356,13 +376,39 @@ void ConfigDialog::InitializeControls(HWND hwnd) {
     (void)baseLblY;
     y += FLD_H + GAP;
 
-    // ---- Session name (per-session chat persistence) ----
-    mkLabel(L"Session name (chat history file)");
-    HWND hSession = CreateWindow(L"EDIT", NULL,
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-        X, y, W, FLD_H, hwnd, (HMENU)ID_EDIT_SESSION, NULL, NULL);
+    // ---- Session picker (per-session chat persistence) ----
+    mkLabel(L"Session (pick existing, or type to create)");
+    HWND hSession = CreateWindow(L"COMBOBOX", NULL,
+        WS_VISIBLE | WS_CHILD | CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP,
+        X, y, W - 70, 200, hwnd, (HMENU)ID_EDIT_SESSION, NULL, NULL);
     SendMessage(hSession, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+    // Populate from existing chat.<name>.txt files in the working directory
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(L"chat.*.txt", &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            std::wstring name = fd.cFileName;
+            if (name.size() > 9
+                && name.compare(0, 5, L"chat.") == 0
+                && name.compare(name.size() - 4, 4, L".txt") == 0)
+            {
+                std::wstring sn = name.substr(5, name.size() - 9);
+                SendMessageW(hSession, CB_ADDSTRING, 0, (LPARAM)sn.c_str());
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+    // Always offer "default" so users have a starting session
+    if (SendMessageW(hSession, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)L"default") == CB_ERR) {
+        SendMessageW(hSession, CB_ADDSTRING, 0, (LPARAM)L"default");
+    }
     SetWindowTextA(hSession, s_config->session_name.c_str());
+
+    HWND hDelSess = CreateWindow(L"BUTTON", L"Delete",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        X + W - 65, y, 65, FLD_H, hwnd, (HMENU)ID_BTN_DEL_SESSION, NULL, NULL);
+    SendMessage(hDelSess, WM_SETFONT, (WPARAM)hFont, TRUE);
     y += FLD_H + GAP;
 
     // ---- Gemini fallback key (used to route F7/auto audio to Gemini when primary provider ≠ Gemini) ----

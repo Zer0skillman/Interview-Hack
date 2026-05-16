@@ -43,11 +43,24 @@ public:
 
     // Background-poll path: send raw audio to Gemini with a strict prompt that
     // returns a TRANSCRIPT line and (optionally) a QUESTION line. Non-streaming,
-    // blocking. The caller then fires GenerateContentStreaming with questionText
-    // to produce the actual streamed answer. Only meaningful for Gemini.
+    // blocking. Returned shape: parsed into ClassifyResult.
+    // Kept for callers that want the 2-call architecture (classifier + separate
+    // streaming answer). The single-call merged path is ClassifyAndAnswerStreaming.
     static ClassifyResult ClassifyAndTranscribe(
         const std::string& wavBase64,
         const LLMConfig& config);
+
+    // Single-call merged path: streams TRANSCRIPT + (optional) ANSWER from one
+    // Gemini request. Saves an extra round-trip vs the 2-call architecture.
+    //
+    // onTranscript fires once when the TRANSCRIPT line completes.
+    // onAnswerChunk fires per chunk of the ANSWER (or never, if response is NONE).
+    // The terminal `isFinal=true` call on onAnswerChunk always fires.
+    static void ClassifyAndAnswerStreaming(
+        const std::string& wavBase64,
+        const LLMConfig& config,
+        std::function<void(const std::wstring&)> onTranscript,
+        LLMStreamCallback onAnswerChunk);
 
 private:
     static std::wstring CallGemini(
@@ -66,6 +79,7 @@ private:
         LLMStreamCallback onChunk);
 
     static std::string BuildGeminiRequestBody(
+        const std::wstring& systemPrompt,
         const std::wstring& userMessage,
         const std::vector<LLMTurn>& history,
         const std::string& pngBase64,

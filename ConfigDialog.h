@@ -29,8 +29,9 @@ private:
     static const int ID_EDIT_GEMINI_KEY  = 109;
     static const int ID_COMBO_DEV_OUT    = 110;
     static const int ID_COMBO_DEV_MIC    = 111;
-    static const int ID_EDIT_SESSION     = 112;
+    static const int ID_EDIT_SESSION     = 112;  // now a CBS_DROPDOWN combo
     static const int ID_CHK_SOUND_AUTO   = 113;
+    static const int ID_BTN_DEL_SESSION  = 114;
     // Rebind buttons take IDs 200, 201, ... one per HotkeyAction
     static const int ID_REBIND_BASE    = 200;
 
