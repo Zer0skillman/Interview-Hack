@@ -27,7 +27,7 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
             "Crash at %04d-%02d-%02d %02d:%02d:%02d\n"
             "Exception code: 0x%08lX\n"
             "Faulting address: %p\n"
-            "Version: 2.1.0\n",
+            "Version: 2.4.1\n",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
             (unsigned long)ep->ExceptionRecord->ExceptionCode,
             ep->ExceptionRecord->ExceptionAddress);
@@ -41,7 +41,7 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     SetUnhandledExceptionFilter(CrashFilter);
-    Logger::Info("startup v2.3.0");
+    Logger::Info("startup v2.4.1");
 
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);

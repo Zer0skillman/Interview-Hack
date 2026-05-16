@@ -8,6 +8,14 @@
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #include <shellapi.h>  // ShellExecuteW
 #include <winhttp.h>   // for the update-check GET
+#include <dwmapi.h>    // Win11 dark title bar + rounded corners
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
 
 // Forward-declaration so methods defined before this helper can call it
 static std::wstring SessionChatPath(const std::string& sessionName);
@@ -224,6 +232,15 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
     if (!SetWindowDisplayAffinity(m_hwnd, WDA_EXCLUDEFROMCAPTURE))
     {
         SetWindowDisplayAffinity(m_hwnd, WDA_MONITOR);
+    }
+
+    // Win11 polish: dark title bar (irrelevant here since we're frameless) and
+    // rounded corners (the overlay benefits visually).
+    {
+        BOOL dark = TRUE;
+        DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        DWORD corner = 2 /*DWMWCP_ROUND*/;
+        DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
     }
 
     SetLayeredWindowAttributes(m_hwnd, 0, (BYTE)m_config.opacity_alpha, LWA_ALPHA);
@@ -1048,7 +1065,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), &path[0], n);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.3.0 UpdateCheck",
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.1 UpdateCheck",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
     WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
@@ -1091,7 +1108,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         a = b = c = 0;
         sscanf(s.c_str(), "%d.%d.%d", &a, &b, &c);
     };
-    int ra, rb, rc, ma = 2, mb = 3, mc = 0;
+    int ra, rb, rc, ma = 2, mb = 4, mc = 1;
     parseVer(tag, ra, rb, rc);
     bool newer = (ra > ma) || (ra == ma && rb > mb) || (ra == ma && rb == mb && rc > mc);
     if (!newer) return;
@@ -1169,7 +1186,7 @@ void OverlayWindow::ShowAbout()
 {
     MessageBoxW(m_hwnd,
         L"Invisible AI Overlay\n"
-        L"Version 2.1.0\n\n"
+        L"Version 2.4.1\n\n"
         L"Live interview & study copilot.\n"
         L"Captures system audio, screenshots, clipboard text.\n"
         L"Streams answers from Gemini / Claude / OpenAI / etc.\n\n"

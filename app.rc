@@ -1,10 +1,14 @@
 #include <windows.h>
 
+// Manifest enables Common Controls v6 (modern Visual Styles) and DPI awareness.
+// Resource ID 1 + type RT_MANIFEST (24) is the standard application manifest.
+1 24 "app.manifest"
+
 1 ICON "app.ico"
 
 1 VERSIONINFO
-FILEVERSION    2,1,0,0
-PRODUCTVERSION 2,1,0,0
+FILEVERSION    2,4,1,0
+PRODUCTVERSION 2,4,1,0
 FILEFLAGSMASK  0x3fL
 FILEFLAGS      0x0L
 FILEOS         VOS_NT_WINDOWS32
@@ -17,12 +21,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Invisible AI Overlay Project"
             VALUE "FileDescription",  "Invisible AI Overlay - Live Interview & Study Copilot"
-            VALUE "FileVersion",      "2.1.0.0"
+            VALUE "FileVersion",      "2.4.1.0"
             VALUE "InternalName",     "overlay"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "overlay.exe"
             VALUE "ProductName",      "Invisible AI Overlay"
-            VALUE "ProductVersion",   "2.1.0.0"
+            VALUE "ProductVersion",   "2.4.1.0"
         END
     END
     BLOCK "VarFileInfo"

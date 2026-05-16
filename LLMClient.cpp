@@ -1094,7 +1094,7 @@ void LLMClient::ClassifyAndAnswerStreaming(
                          + Utf8ToWide(config.api_key);
 
     // Reuse the same WinHTTP streaming pattern as CallGeminiStreaming.
-    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.3.0 Merged",
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.4.1 Merged",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { parser.Finalize(); return; }
     WinHttpSetTimeouts(hSession, 5000, 10000, 30000, 60000);

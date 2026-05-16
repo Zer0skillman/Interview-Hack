@@ -26,7 +26,7 @@ if (Test-Path "app.rc") {
 
 $resObj = ""
 if (Test-Path "app.res.o") { $resObj = "app.res.o" }
-$gppCommand = "g++ main.cpp OverlayWindow.cpp Overlay_Rendering.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp AudioCapture.cpp Logger.cpp $resObj -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32 -lgdiplus -lcrypt32 -lole32 -lshell32"
+$gppCommand = "g++ main.cpp OverlayWindow.cpp Overlay_Rendering.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp AudioCapture.cpp Logger.cpp $resObj -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32 -lgdiplus -lcrypt32 -lole32 -lshell32 -ldwmapi"
 
 Write-Host "Running: $gppCommand"
 Invoke-Expression $gppCommand

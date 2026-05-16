@@ -1,8 +1,31 @@
 #include "ConfigDialog.h"
 #include "AudioCapture.h"
 #include <commctrl.h>
+#include <dwmapi.h>
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+// DWM attributes for Win10/Win11 visual polish — defined locally so we don't
+// need a newer Windows SDK at build time.
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+enum AC_DWMWCP { DWMWCP_DEFAULT_AC = 0, DWMWCP_DONOTROUND_AC = 1, DWMWCP_ROUND_AC = 2 };
+
+static void ApplyWin11Look(HWND hwnd) {
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    DWORD corner = DWMWCP_ROUND_AC;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+    // Mica backdrop is finicky with our custom-painted bg; leave default.
+}
 
 // Module-local lists so SaveAndClose can map combo selection -> device ID
 static std::vector<AudioDeviceInfo> s_outDevices;
@@ -106,8 +129,8 @@ bool ConfigDialog::Show(HINSTANCE hInstance, LLMConfig& config, const std::vecto
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = 620;
-    int winH = 620;
+    int winW = 700;
+    int winH = 760;
     int x = (screenW - winW) / 2;
     int y = (screenH - winH) / 2;
 
@@ -117,6 +140,9 @@ bool ConfigDialog::Show(HINSTANCE hInstance, LLMConfig& config, const std::vecto
         NULL, NULL, hInstance, NULL);
 
     if (!hwnd) return false;
+
+    // Win11 polish: dark title bar + rounded corners (no-op on older Windows)
+    ApplyWin11Look(hwnd);
 
     MSG msg = { 0 };
     while (GetMessage(&msg, NULL, 0, 0)) {
@@ -223,6 +249,24 @@ LRESULT CALLBACK ConfigDialog::DialogProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         SetTextColor(hdcStatic, RGB(220, 220, 220));
         SetBkColor(hdcStatic, RGB(28, 28, 32));
         return (LRESULT)(s_bgBrush ? s_bgBrush : (HBRUSH)(COLOR_WINDOW + 1));
+    }
+    case WM_CTLCOLOREDIT: {
+        // Dark input field — bright text on a slightly-lighter-than-bg fill
+        static HBRUSH s_editBrush = NULL;
+        if (!s_editBrush) s_editBrush = CreateSolidBrush(RGB(42, 42, 50));
+        HDC hdcEdit = (HDC)wParam;
+        SetTextColor(hdcEdit, RGB(240, 240, 245));
+        SetBkColor(hdcEdit, RGB(42, 42, 50));
+        return (LRESULT)s_editBrush;
+    }
+    case WM_CTLCOLORLISTBOX: {
+        // Combo dropdown lists
+        static HBRUSH s_listBrush = NULL;
+        if (!s_listBrush) s_listBrush = CreateSolidBrush(RGB(42, 42, 50));
+        HDC hdcList = (HDC)wParam;
+        SetTextColor(hdcList, RGB(240, 240, 245));
+        SetBkColor(hdcList, RGB(42, 42, 50));
+        return (LRESULT)s_listBrush;
     }
 
     case WM_COMMAND: {
@@ -420,13 +464,15 @@ void ConfigDialog::InitializeControls(HWND hwnd) {
     SetWindowTextA(hGem, s_config->gemini_fallback_key.c_str());
     y += FLD_H + GAP * 2;
 
-    // ---- Start button ----
-    HFONT hBtnFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    // ---- Start button (primary action — visually prominent) ----
+    HFONT hBtnFont = CreateFont(17, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    HWND hBtn = CreateWindow(L"BUTTON", L"Start Overlay",
+    int btnW = W;     // full form column width
+    int btnH = 44;    // taller for visual weight
+    HWND hBtn = CreateWindow(L"BUTTON", L"Start Overlay  ➜",
         WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-        X + 50, y, 220, 38, hwnd, (HMENU)ID_BTN_START, NULL, NULL);
+        X, y + 6, btnW, btnH, hwnd, (HMENU)ID_BTN_START, NULL, NULL);
     SendMessage(hBtn, WM_SETFONT, (WPARAM)hBtnFont, TRUE);
 
     // ---- Rebind controls in the right panel ----
