@@ -6,11 +6,28 @@ Thanks for looking at this. The codebase is small, single-platform (Windows), an
 
 **Requirements:** MSYS2 with mingw-w64 g++ in PATH (`C:\msys64\mingw64\bin`).
 
+Two build paths are supported. Pick the one that fits your workflow:
+
+### PowerShell script (fastest for local Windows iteration)
+
 ```powershell
 .\build_release.ps1
 ```
 
-Produces `project_app\overlay.exe` (~4 MB). The script handles Windows Defender briefly locking the freshly-written file (retries up to 5 times).
+Produces `project_app\overlay.exe` (~4 MB) and `tests.exe`. The script handles Windows Defender briefly locking the freshly-written file (retries up to 5 times).
+
+### CMake (cross-platform — required for the macOS port)
+
+```powershell
+$env:Path = "C:\msys64\mingw64\bin;" + $env:Path
+cmake -B build -G "MinGW Makefiles"
+cmake --build build --parallel
+cmake --build build --target package   # optional: stages project_app/
+```
+
+The CMake build produces `build\overlay.exe` and `build\tests.exe`. On macOS the build target intentionally fails — the platform code under `macos/` is still being written.
+
+CI runs **both** build paths on every push so they stay in sync.
 
 ## Code layout
 

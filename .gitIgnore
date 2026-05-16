@@ -21,3 +21,5 @@ python_backend/dist/
 python_backend/build/
 *.pyc
 
+build/
+build-cmake/

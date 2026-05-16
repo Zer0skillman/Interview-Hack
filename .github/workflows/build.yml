@@ -26,7 +26,7 @@ jobs:
           g++ --version
           windres --version
 
-      - name: Build
+      - name: Build (PowerShell script — primary)
         shell: pwsh
         run: |
           $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
@@ -36,6 +36,22 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path tests.exe) { .\tests.exe } else { Write-Warning "tests.exe missing - skipping" }
+
+      - name: Verify CMake build path also works (cross-platform readiness check)
+        shell: pwsh
+        run: |
+          $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
+          cmake --version
+          cmake -S . -B build-cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cmake --parallel
+          if (-not (Test-Path build-cmake\overlay.exe)) {
+            throw "CMake build did not produce overlay.exe"
+          }
+          if (-not (Test-Path build-cmake\tests.exe)) {
+            throw "CMake build did not produce tests.exe"
+          }
+          .\build-cmake\tests.exe
+          Write-Host "CMake build OK: overlay.exe + tests.exe both produced and tests passed"
 
       - name: Upload artifact (every build)
         uses: actions/upload-artifact@v4
