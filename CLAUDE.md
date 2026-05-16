@@ -70,7 +70,25 @@ CI exercises both paths on every push.
 
 ## If you're picking up the macOS port
 
-Read `MACOS_PORT.md`. The Windows side is fully done. The Mac side needs
-five `.mm` files plus Info.plist + a CMake APPLE branch flip. Phase-1
-abstractions (audio + screenshot interfaces) are already in place;
-you implement them.
+Phase 2 is in. Both platforms build from this repo. The macOS-specific
+behaviors worth knowing:
+
+- **Defaults differ.** On Mac, the default hotkeys are `Cmd+Option+G/A/V/D/X/…`
+  (Mac Airs have no Insert/Forward-Delete/Home/End/PgUp/PgDn keys and the
+  F-row needs Fn unless the user changes System Settings). On Windows the
+  defaults remain F7/F8/INS/DEL/END/PgUp/PgDn. Both sets coexist via
+  `#ifdef __APPLE__` in `ConfigLoader::DefaultHotkeys()`.
+- **`BindingToString`/`BindingFromString` accept both label forms** —
+  saved config uses `Cmd+`/`Option+` on Mac and `Win+`/`Alt+` on Windows;
+  parser accepts either so a file moved between platforms still loads.
+- **Mac-only hardcoded extras**: `Cmd+Option+/` (toggle hints panel),
+  `Cmd+Option+,` (reopen settings dialog), `Cmd+Option+I` (about). Not in
+  the `HotkeyAction` enum — registered separately in `MacOverlayWindow`'s
+  `Initialize` mirroring how F2/F11/F1 are hardcoded on Windows.
+- **macOS 14+ only.** `CGDisplayCreateImage` was removed in 15;
+  `SCScreenshotManager` (the replacement) is 14+. Don't lower this.
+- **ARC is enabled per-source** in CMake via `-fobjc-arc` on the .mm files.
+  `__bridge_retained`/`__bridge_transfer` actually transfer ownership.
+- **`Logger`**: writes to `logs/app.log` in CWD. When launched via
+  `open build/overlay.app` the CWD is the user's home, so logs land at
+  `~/logs/app.log`.

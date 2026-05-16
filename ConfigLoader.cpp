@@ -77,6 +77,28 @@ LLMConfig ConfigLoader::LoadConfig(const std::string& filepath) {
     migrate(HotkeyAction::ResetChat,  MOD_CONTROL,             'R', MOD_CONTROL | MOD_ALT, 'R');
     migrate(HotkeyAction::SelectMode, MOD_CONTROL | MOD_SHIFT, 'C', MOD_CONTROL | MOD_ALT, 'S');
 
+#ifdef __APPLE__
+    // Mac migration: the Windows defaults use keys that simply don't exist on
+    // a MacBook Air keyboard (Insert, Forward-Delete, Home, End, Page Up/Down,
+    // numeric F-keys without Fn). Replace any binding that still matches the
+    // old Windows default with the Mac-friendly Cmd+Option+letter combo so the
+    // overlay actually responds to keypresses.
+    migrate(HotkeyAction::SendScreen,       0, VK_F8,    MOD_WIN | MOD_ALT, 'G');
+    migrate(HotkeyAction::SendAudio,        0, VK_F7,    MOD_WIN | MOD_ALT, 'A');
+    migrate(HotkeyAction::ToggleAuto,       0, VK_F9,    MOD_WIN | MOD_ALT, 'T');
+    migrate(HotkeyAction::MoveMode,         0, VK_F10,   MOD_WIN | MOD_ALT, 'W');
+    migrate(HotkeyAction::SendText,         0, VK_INSERT,MOD_WIN | MOD_ALT, 'V');
+    migrate(HotkeyAction::ToggleVisibility, 0, VK_DELETE,MOD_WIN | MOD_ALT, 'D');
+    migrate(HotkeyAction::ExitApp,          0, VK_END,   MOD_WIN | MOD_ALT, 'X');
+    migrate(HotkeyAction::ScrollUp,         0, VK_PRIOR, MOD_WIN | MOD_ALT, 'K');
+    migrate(HotkeyAction::ScrollDown,       0, VK_NEXT,  MOD_WIN | MOD_ALT, 'J');
+    // Ctrl+Alt+letter works on Mac (= Control+Option) but feels foreign;
+    // promote to Cmd+Option which Mac users expect.
+    migrate(HotkeyAction::ResetChat,  MOD_CONTROL | MOD_ALT, 'R', MOD_WIN | MOD_ALT, 'R');
+    migrate(HotkeyAction::CopyAnswer, MOD_CONTROL | MOD_ALT, 'C', MOD_WIN | MOD_ALT, 'C');
+    migrate(HotkeyAction::SelectMode, MOD_CONTROL | MOD_ALT, 'S', MOD_WIN | MOD_ALT, 'E');
+#endif
+
     return config;
 }
 
@@ -226,6 +248,25 @@ ConfigLoader::ThemeColors ConfigLoader::GetTheme(const std::string& id) {
 
 HotkeyConfig ConfigLoader::DefaultHotkeys() {
     HotkeyConfig c;
+#ifdef __APPLE__
+    // Mac defaults: Cmd+Option+letter throughout. MacBook Air keyboards have
+    // no Insert / Forward-Delete / Home / End / PgUp / PgDn, and F-keys
+    // require Fn unless the user changes a System Setting. Letter mnemonics
+    // pick combos that aren't claimed by common macOS shortcuts.
+    // (MOD_WIN bit translates to Cmd in MacOverlayWindow.mm's ConvertModifiers.)
+    c.bindings[(int)HotkeyAction::SendScreen]       = { MOD_WIN | MOD_ALT, 'G' };  // Grab
+    c.bindings[(int)HotkeyAction::SendAudio]        = { MOD_WIN | MOD_ALT, 'A' };  // Audio
+    c.bindings[(int)HotkeyAction::ToggleAuto]       = { MOD_WIN | MOD_ALT, 'T' };  // Toggle auto
+    c.bindings[(int)HotkeyAction::MoveMode]         = { MOD_WIN | MOD_ALT, 'W' };  // Window move
+    c.bindings[(int)HotkeyAction::ResetChat]        = { MOD_WIN | MOD_ALT, 'R' };  // Reset
+    c.bindings[(int)HotkeyAction::CopyAnswer]       = { MOD_WIN | MOD_ALT, 'C' };  // Copy
+    c.bindings[(int)HotkeyAction::SelectMode]       = { MOD_WIN | MOD_ALT, 'E' };  // sElect
+    c.bindings[(int)HotkeyAction::SendText]         = { MOD_WIN | MOD_ALT, 'V' };  // paste/send
+    c.bindings[(int)HotkeyAction::ToggleVisibility] = { MOD_WIN | MOD_ALT, 'D' };  // Display
+    c.bindings[(int)HotkeyAction::ExitApp]          = { MOD_WIN | MOD_ALT, 'X' };  // eXit
+    c.bindings[(int)HotkeyAction::ScrollUp]         = { MOD_WIN | MOD_ALT, 'K' };  // vim up
+    c.bindings[(int)HotkeyAction::ScrollDown]       = { MOD_WIN | MOD_ALT, 'J' };  // vim down
+#else
     c.bindings[(int)HotkeyAction::SendScreen]       = { 0, VK_F8 };
     c.bindings[(int)HotkeyAction::SendAudio]        = { 0, VK_F7 };
     c.bindings[(int)HotkeyAction::ToggleAuto]       = { 0, VK_F9 };
@@ -241,6 +282,7 @@ HotkeyConfig ConfigLoader::DefaultHotkeys() {
     c.bindings[(int)HotkeyAction::ExitApp]          = { 0, VK_END };
     c.bindings[(int)HotkeyAction::ScrollUp]         = { 0, VK_PRIOR };
     c.bindings[(int)HotkeyAction::ScrollDown]       = { 0, VK_NEXT };
+#endif
     return c;
 }
 
@@ -283,10 +325,20 @@ const char* ConfigLoader::ActionLabel(HotkeyAction a) {
 std::string ConfigLoader::BindingToString(const HotkeyBinding& b) {
     if (b.empty()) return "(unset)";
     std::string out;
+#ifdef __APPLE__
+    // Mac users think in Cmd / Option / Control. The bit positions are the
+    // same — only the labels differ. BindingFromString accepts both forms
+    // so a config file moved between platforms still parses.
+    if (b.modifiers & MOD_CONTROL) out += "Control+";
+    if (b.modifiers & MOD_ALT)     out += "Option+";
+    if (b.modifiers & MOD_SHIFT)   out += "Shift+";
+    if (b.modifiers & MOD_WIN)     out += "Cmd+";
+#else
     if (b.modifiers & MOD_CONTROL) out += "Ctrl+";
     if (b.modifiers & MOD_ALT)     out += "Alt+";
     if (b.modifiers & MOD_SHIFT)   out += "Shift+";
     if (b.modifiers & MOD_WIN)     out += "Win+";
+#endif
 
     // Friendly key names for common VKs
     switch (b.vk) {
@@ -337,10 +389,17 @@ HotkeyBinding ConfigLoader::BindingFromString(const std::string& s) {
         return false;
     };
     while (true) {
-        if (consume("Ctrl+"))  { b.modifiers |= MOD_CONTROL; continue; }
-        if (consume("Alt+"))   { b.modifiers |= MOD_ALT;     continue; }
-        if (consume("Shift+")) { b.modifiers |= MOD_SHIFT;   continue; }
-        if (consume("Win+"))   { b.modifiers |= MOD_WIN;     continue; }
+        // Accept both Win-style and Mac-style labels so a llm_config.txt
+        // moved across platforms still parses.
+        if (consume("Ctrl+"))    { b.modifiers |= MOD_CONTROL; continue; }
+        if (consume("Control+")) { b.modifiers |= MOD_CONTROL; continue; }
+        if (consume("Alt+"))     { b.modifiers |= MOD_ALT;     continue; }
+        if (consume("Option+"))  { b.modifiers |= MOD_ALT;     continue; }
+        if (consume("Opt+"))     { b.modifiers |= MOD_ALT;     continue; }
+        if (consume("Shift+"))   { b.modifiers |= MOD_SHIFT;   continue; }
+        if (consume("Win+"))     { b.modifiers |= MOD_WIN;     continue; }
+        if (consume("Cmd+"))     { b.modifiers |= MOD_WIN;     continue; }
+        if (consume("Command+")) { b.modifiers |= MOD_WIN;     continue; }
         break;
     }
 

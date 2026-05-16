@@ -9,16 +9,22 @@
 
 // Cocoa chat renderer.
 //
-// First-cut port of Overlay_Rendering.cpp (~35KB of GDI code) into AppKit. The
-// segment / code-vs-prose split is reused from Parsers.h; only the drawing
-// layer changes. Visual fidelity matches the dark-mode look the Windows side
-// uses (rounded bubbles, blue user, grey bot, monospace code blocks, status
-// bar at the top). Inline-markdown polish (bold/italic, bracket colorizing) is
-// deferred — added once the rest of the port is shipping. StripInlineMd keeps
-// prose readable in the meantime.
+// Port of Overlay_Rendering.cpp into AppKit. Reads message text shape via
+// parsers::ParseSegments from Parsers.h so prose vs. code splitting is the
+// same code path as the Windows side; only the draw layer changes.
+//
+// Visual responsibilities here:
+//   - rounded translucent background + status bar with live transcript
+//   - chat bubbles (user right, bot left), with code block insets
+//   - "thinking…" indicator while an LLM call is in flight
+//   - audio level dot pulsing with RecentEnergy()
+//   - hotkey hints overlay panel (toggled by Cmd+Option+/)
+//
+// Inline-markdown polish (bold/italic, syntax highlighting) is deferred —
+// StripInlineMd keeps prose readable until that lands.
 
 // -----------------------------------------------------------------------------
-// Helpers (declared before use)
+// Helpers (forward-declared so drawRect can use them)
 // -----------------------------------------------------------------------------
 
 static NSColor* ColorFromRGB(unsigned long rgb) {
@@ -28,9 +34,6 @@ static NSColor* ColorFromRGB(unsigned long rgb) {
     return [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0];
 }
 
-// std::wstring -> NSString via UTF-8 (handles UTF-16 surrogate pairs on
-// platforms where wchar_t is 2 bytes; on macOS it's 4 bytes and the loop
-// just decodes scalars directly).
 static NSString* WideToNS(const std::wstring& w) {
     if (w.empty()) return @"";
     std::string utf8;
@@ -63,23 +66,28 @@ static NSString* WideToNS(const std::wstring& w) {
 }
 
 // -----------------------------------------------------------------------------
-// ChatView — the NSView that paints messages
+// ChatView
 // -----------------------------------------------------------------------------
 
 @interface ChatView : NSView {
     @public
     const std::vector<ChatMessage>* messages;
+    const LLMConfig* configRef;    // weak — owned by MacOverlayWindowImpl
     NSString*  transcript;
     ConfigLoader::ThemeColors theme;
     std::string themeId;
     BOOL autoMode;
     BOOL moveMode;
     BOOL selectMode;
+    BOOL thinking;
+    BOOL hintsVisible;
+    float audioLevel;
     CGFloat scrollOffset;
     CGFloat contentHeight;
 }
 - (void)scrollByDelta:(CGFloat)delta;
 - (void)setMessagesPointer:(const std::vector<ChatMessage>*)m;
+- (void)drawHintsPanel:(NSRect)bounds;
 @end
 
 @implementation ChatView
@@ -92,14 +100,18 @@ static NSString* WideToNS(const std::wstring& w) {
         autoMode = NO;
         moveMode = NO;
         selectMode = NO;
+        thinking = NO;
+        hintsVisible = NO;
+        audioLevel = 0;
         scrollOffset = 0;
         contentHeight = 0;
         messages = nullptr;
+        configRef = nullptr;
     }
     return self;
 }
 
-- (BOOL)isFlipped { return YES; }   // y grows downward — easier for chat scroll
+- (BOOL)isFlipped { return YES; }
 
 - (void)setMessagesPointer:(const std::vector<ChatMessage>*)m {
     messages = m;
@@ -117,47 +129,91 @@ static NSString* WideToNS(const std::wstring& w) {
     [self scrollByDelta:-event.scrollingDeltaY];
 }
 
+// Build a short "G grab · A audio · V clip · D hide · X exit" string from the
+// live bindings, so it stays accurate after a rebind.
+- (NSString*)defaultHintString {
+    if (!configRef) {
+        return @"⌘⌥G screen · ⌘⌥A audio · ⌘⌥V clipboard · ⌘⌥D hide · ⌘⌥X exit";
+    }
+    auto fmt = [&](HotkeyAction a) {
+        std::string s = ConfigLoader::BindingToString(configRef->hotkeys.bindings[(int)a]);
+        return [NSString stringWithUTF8String:s.c_str()];
+    };
+    return [NSString stringWithFormat:@"%@ screen · %@ audio · %@ clip · %@ hide · %@ exit",
+        fmt(HotkeyAction::SendScreen),
+        fmt(HotkeyAction::SendAudio),
+        fmt(HotkeyAction::SendText),
+        fmt(HotkeyAction::ToggleVisibility),
+        fmt(HotkeyAction::ExitApp)];
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     @autoreleasepool {
         NSRect bounds = self.bounds;
-        CGFloat opacity = 0.85;
 
         // Rounded translucent background
         NSBezierPath* bg = [NSBezierPath bezierPathWithRoundedRect:bounds
                                                           xRadius:14
                                                           yRadius:14];
-        [[ColorFromRGB(theme.bg) colorWithAlphaComponent:opacity] set];
+        [[ColorFromRGB(theme.bg) colorWithAlphaComponent:0.88] set];
         [bg fill];
 
-        // Top status / transcript bar
-        CGFloat barH = 28;
+        // Top status bar
+        CGFloat barH = 30;
         NSRect barRect = NSMakeRect(0, 0, bounds.size.width, barH);
         [[ColorFromRGB(theme.bar_bg) colorWithAlphaComponent:0.95] set];
         NSRectFill(barRect);
 
+        // Mode badges + transcript / hint
         NSMutableString* status = [NSMutableString string];
         if (autoMode)   [status appendString:@"[AUTO] "];
         if (moveMode)   [status appendString:@"[MOVE] "];
         if (selectMode) [status appendString:@"[SELECT] "];
+        if (thinking)   [status appendString:@"thinking… "];
         if (transcript && transcript.length > 0) [status appendString:transcript];
-        if (status.length == 0) {
-            [status appendString:@"Invisible AI Overlay — F8 screen · F7 audio · INS clipboard · DEL hide · END exit"];
-        }
+        if (status.length == 0) [status appendString:[self defaultHintString]];
 
         NSDictionary* barAttrs = @{
             NSFontAttributeName: [NSFont systemFontOfSize:12],
             NSForegroundColorAttributeName: ColorFromRGB(theme.bar_text),
         };
-        NSRect barTextRect = NSInsetRect(barRect, 12, 6);
+        // Leave room on the right for the audio level dot.
+        NSRect barTextRect = NSMakeRect(12, 7, bounds.size.width - 40, 18);
         [status drawInRect:barTextRect withAttributes:barAttrs];
+
+        // Audio level dot (top-right of bar). Radius grows with energy.
+        {
+            CGFloat lvl = audioLevel;
+            if (lvl < 0) lvl = 0; if (lvl > 1) lvl = 1;
+            CGFloat radius = 3 + lvl * 6;
+            NSColor* dotColor = lvl > 0.02
+                ? [NSColor systemGreenColor]
+                : [[NSColor systemGrayColor] colorWithAlphaComponent:0.5];
+            NSRect dot = NSMakeRect(bounds.size.width - 18 - radius,
+                                    (barH - 2 * radius) / 2,
+                                    2 * radius, 2 * radius);
+            [dotColor set];
+            [[NSBezierPath bezierPathWithOvalInRect:dot] fill];
+        }
 
         // Empty state
         if (!messages || messages->empty()) {
             contentHeight = 0;
-            NSString* hint = @"Press F8 to capture the screen, F7 for last 30s audio, "
-                             @"INS to send clipboard text.\n"
-                             @"This window is invisible to screen capture.";
+            NSString* hint = [NSString stringWithFormat:
+                @"Press %@ to capture the screen.\n"
+                @"Press %@ for the last 30s of audio.\n"
+                @"Press %@ to send clipboard text.\n"
+                @"This window is invisible to screen capture (NSWindowSharingNone).",
+                configRef ? [NSString stringWithUTF8String:
+                    ConfigLoader::BindingToString(configRef->hotkeys.bindings[(int)HotkeyAction::SendScreen]).c_str()]
+                          : @"⌘⌥G",
+                configRef ? [NSString stringWithUTF8String:
+                    ConfigLoader::BindingToString(configRef->hotkeys.bindings[(int)HotkeyAction::SendAudio]).c_str()]
+                          : @"⌘⌥A",
+                configRef ? [NSString stringWithUTF8String:
+                    ConfigLoader::BindingToString(configRef->hotkeys.bindings[(int)HotkeyAction::SendText]).c_str()]
+                          : @"⌘⌥V"];
             NSDictionary* hintAttrs = @{
                 NSFontAttributeName: [NSFont systemFontOfSize:14],
                 NSForegroundColorAttributeName:
@@ -167,10 +223,11 @@ static NSString* WideToNS(const std::wstring& w) {
                                          bounds.size.width - 40,
                                          bounds.size.height - barH - 40);
             [hint drawInRect:hintRect withAttributes:hintAttrs];
+            if (hintsVisible) [self drawHintsPanel:bounds];
             return;
         }
 
-        // Bubbles — measure each then draw
+        // Chat bubbles
         const CGFloat margin = 14;
         const CGFloat bubbleMaxWidth = bounds.size.width - 2 * margin - 20;
         const CGFloat bubblePadX = 12;
@@ -271,6 +328,61 @@ static NSString* WideToNS(const std::wstring& w) {
         }
 
         contentHeight = (y + scrollOffset) - (barH + 12);
+
+        if (hintsVisible) [self drawHintsPanel:bounds];
+    }
+}
+
+// Overlay panel that lists every current hotkey binding. Toggled by the
+// Cmd+Option+/ hardcoded hotkey from MacOverlayWindow.
+- (void)drawHintsPanel:(NSRect)bounds {
+    const CGFloat panelW = MIN(420.0, bounds.size.width - 40);
+    const CGFloat panelH = MIN(440.0, bounds.size.height - 50);
+    NSRect panel = NSMakeRect((bounds.size.width - panelW) / 2,
+                              (bounds.size.height - panelH) / 2,
+                              panelW, panelH);
+    [[NSColor colorWithWhite:0 alpha:0.9] set];
+    NSBezierPath* p = [NSBezierPath bezierPathWithRoundedRect:panel
+                                                      xRadius:12 yRadius:12];
+    [p fill];
+    [[NSColor whiteColor] set];
+    p.lineWidth = 1;
+    [p stroke];
+
+    NSDictionary* titleAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:16],
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+    };
+    NSDictionary* rowAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13],
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+    };
+    NSDictionary* keyAttrs = @{
+        NSFontAttributeName: [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: [NSColor systemTealColor],
+    };
+
+    [@"Hotkeys" drawAtPoint:NSMakePoint(panel.origin.x + 16, panel.origin.y + 14)
+              withAttributes:titleAttrs];
+
+    [@"Press ⌘⌥/ to close · ⌘⌥, to re-open settings" drawAtPoint:
+        NSMakePoint(panel.origin.x + 16, panel.origin.y + 38)
+                                                  withAttributes:@{
+        NSFontAttributeName: [NSFont systemFontOfSize:11],
+        NSForegroundColorAttributeName: [NSColor lightGrayColor],
+    }];
+
+    CGFloat ry = panel.origin.y + 64;
+    for (int i = 0; i < (int)HotkeyAction::Count; ++i) {
+        NSString* label = [NSString stringWithUTF8String:
+            ConfigLoader::ActionLabel((HotkeyAction)i)];
+        NSString* keyStr = configRef
+            ? [NSString stringWithUTF8String:
+                ConfigLoader::BindingToString(configRef->hotkeys.bindings[i]).c_str()]
+            : @"(unset)";
+        [label  drawAtPoint:NSMakePoint(panel.origin.x + 16, ry) withAttributes:rowAttrs];
+        [keyStr drawAtPoint:NSMakePoint(panel.origin.x + 230, ry) withAttributes:keyAttrs];
+        ry += 22;
     }
 }
 
@@ -320,5 +432,37 @@ extern "C" void ChatViewSetMode(NSView* view, BOOL autoMode, BOOL moveMode, BOOL
 extern "C" void ChatViewScroll(NSView* view, int delta) {
     if ([view isKindOfClass:[ChatView class]]) {
         [(ChatView*)view scrollByDelta:(CGFloat)delta];
+    }
+}
+
+extern "C" void ChatViewSetConfig(NSView* view, const LLMConfig* cfg) {
+    if ([view isKindOfClass:[ChatView class]]) {
+        ChatView* cv = (ChatView*)view;
+        cv->configRef = cfg;
+        [cv setNeedsDisplay:YES];
+    }
+}
+
+extern "C" void ChatViewSetAudioLevel(NSView* view, float level) {
+    if ([view isKindOfClass:[ChatView class]]) {
+        ChatView* cv = (ChatView*)view;
+        cv->audioLevel = level;
+        [cv setNeedsDisplay:YES];
+    }
+}
+
+extern "C" void ChatViewSetThinking(NSView* view, BOOL thinking) {
+    if ([view isKindOfClass:[ChatView class]]) {
+        ChatView* cv = (ChatView*)view;
+        cv->thinking = thinking;
+        [cv setNeedsDisplay:YES];
+    }
+}
+
+extern "C" void ChatViewToggleHints(NSView* view) {
+    if ([view isKindOfClass:[ChatView class]]) {
+        ChatView* cv = (ChatView*)view;
+        cv->hintsVisible = !cv->hintsVisible;
+        [cv setNeedsDisplay:YES];
     }
 }

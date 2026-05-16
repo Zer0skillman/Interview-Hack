@@ -45,6 +45,12 @@ public:
     void ExitApp();
     void ScrollChat(int delta);
 
+    // Mac-only hardcoded extras (hints panel, runtime settings, about) —
+    // mirror the F2/F11/F1 hotkeys on the Windows side.
+    void ToggleHotkeyHints();
+    void OpenRuntimeSettings();
+    void ShowAbout();
+
 private:
     std::unique_ptr<MacOverlayWindowImpl> m_impl;
 };

@@ -41,6 +41,16 @@ extern "C" void ChatViewSetTranscript(NSView* view, NSString* text);
 extern "C" void ChatViewSetTheme(NSView* view, const char* themeId);
 extern "C" void ChatViewSetMode(NSView* view, BOOL autoMode, BOOL moveMode, BOOL selectMode);
 extern "C" void ChatViewScroll(NSView* view, int delta);
+extern "C" void ChatViewSetConfig(NSView* view, const LLMConfig* cfg);
+extern "C" void ChatViewSetAudioLevel(NSView* view, float level);
+extern "C" void ChatViewSetThinking(NSView* view, BOOL thinking);
+extern "C" void ChatViewToggleHints(NSView* view);
+
+// Re-show the welcome dialog so the user can rebind hotkeys / change provider
+// without restarting the app. Implemented in MacConfigDialog.mm.
+namespace MacConfigDialog {
+    bool Show(LLMConfig& config, const std::vector<ModelInfo>& models);
+}
 
 // -----------------------------------------------------------------------------
 // Carbon hotkey glue
@@ -131,6 +141,12 @@ public:
     std::atomic<bool> selectMode{false};
 
     std::vector<EventHotKeyRef> hotkeys;
+    // Reserved IDs for hardcoded Mac-only hotkeys (hints/settings/about).
+    // These are NOT part of the HotkeyAction enum (Windows F2 hints is also
+    // hardcoded, not enum-driven).
+    static constexpr UInt32 kHkToggleHints  = 9001;
+    static constexpr UInt32 kHkOpenSettings = 9002;
+    static constexpr UInt32 kHkShowAbout    = 9003;
 
     // Adds a new message in a thread-safe way and triggers a re-render on the
     // main thread.
@@ -209,8 +225,8 @@ public:
 
 namespace {
 struct HotkeyEntry {
-    UInt32 id;
-    HotkeyAction action;
+    UInt32 id;             // signature id; >=9001 means hardcoded special
+    HotkeyAction action;   // valid when id < 9001
     MacOverlayWindow* owner;
 };
 static std::vector<HotkeyEntry> g_hotkeys;
@@ -225,16 +241,29 @@ static OSStatus HotkeyEventHandler(EventHandlerCallRef, EventRef event, void*) {
 
     HotkeyAction action = HotkeyAction::Count;
     MacOverlayWindow* owner = nullptr;
+    UInt32 matchedId = 0;
     {
         std::lock_guard<std::mutex> lk(g_hotkeyMutex);
         for (auto& e : g_hotkeys) {
-            if (e.id == hkid.id) { action = e.action; owner = e.owner; break; }
+            if (e.id == hkid.id) { action = e.action; owner = e.owner; matchedId = e.id; break; }
         }
     }
-    if (!owner || action == HotkeyAction::Count) return noErr;
+    if (!owner) return noErr;
 
-    // Run on main queue so UI updates are safe
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (matchedId == MacOverlayWindowImpl::kHkToggleHints) {
+            owner->ToggleHotkeyHints();
+            return;
+        }
+        if (matchedId == MacOverlayWindowImpl::kHkOpenSettings) {
+            owner->OpenRuntimeSettings();
+            return;
+        }
+        if (matchedId == MacOverlayWindowImpl::kHkShowAbout) {
+            owner->ShowAbout();
+            return;
+        }
+        if (action == HotkeyAction::Count) return;
         switch (action) {
             case HotkeyAction::SendScreen:       owner->CaptureScreenOnly(); break;
             case HotkeyAction::SendAudio:        owner->CaptureAudioOnly(); break;
@@ -320,21 +349,83 @@ bool MacOverlayWindow::Initialize() {
 
         // 4) Register hotkeys (Carbon)
         InstallHotkeyEventHandlerOnce();
+        int registered = 0, failed = 0;
         for (int i = 0; i < (int)HotkeyAction::Count; ++i) {
             HotkeyBinding b = m_impl->config.hotkeys.bindings[i];
             if (b.empty()) continue;
             UInt32 mods = ConvertModifiers(b.modifiers);
             UInt32 kc   = ConvertVk(b.vk);
-            if (kc == 0xFFFF) continue;
+            const char* actionId = ConfigLoader::ActionId((HotkeyAction)i);
+            std::string label = ConfigLoader::BindingToString(b);
+
+            if (kc == 0xFFFF) {
+                Logger::Warn(std::string("hotkey skipped (no Mac keycode for VK=") +
+                             std::to_string(b.vk) + "): " + actionId + " = " + label);
+                failed++;
+                continue;
+            }
             EventHotKeyID hkid = { 'OVRL', (UInt32)(i + 1) };
             EventHotKeyRef ref = nullptr;
-            if (RegisterEventHotKey(kc, mods, hkid, GetApplicationEventTarget(),
-                                    0, &ref) == noErr) {
+            OSStatus st = RegisterEventHotKey(kc, mods, hkid, GetApplicationEventTarget(),
+                                              0, &ref);
+            if (st == noErr) {
                 m_impl->hotkeys.push_back(ref);
-                std::lock_guard<std::mutex> lk(g_hotkeyMutex);
-                g_hotkeys.push_back({ (UInt32)(i + 1), (HotkeyAction)i, this });
+                {
+                    std::lock_guard<std::mutex> lk(g_hotkeyMutex);
+                    g_hotkeys.push_back({ (UInt32)(i + 1), (HotkeyAction)i, this });
+                }
+                Logger::Info(std::string("hotkey ") + label + " -> " + actionId);
+                registered++;
+            } else {
+                // eventHotKeyExistsErr = -9878 — another app already owns this combo.
+                Logger::Warn(std::string("hotkey FAILED (OSStatus ") + std::to_string(st) +
+                             "): " + actionId + " = " + label);
+                failed++;
             }
         }
+        Logger::Info("hotkeys: " + std::to_string(registered) +
+                     " registered, " + std::to_string(failed) + " failed");
+
+        // Mac-only hardcoded extras (don't take a slot in HotkeyAction enum,
+        // mirroring how F2/F1/F11 are hardcoded on Windows OverlayWindow.cpp).
+        auto registerSpecial = [&](UInt32 id, UInt32 mods, UInt32 keyCode,
+                                   const char* label) {
+            EventHotKeyID hkid = { 'OVRL', id };
+            EventHotKeyRef ref = nullptr;
+            if (RegisterEventHotKey(keyCode, mods, hkid,
+                                    GetApplicationEventTarget(), 0, &ref) == noErr) {
+                m_impl->hotkeys.push_back(ref);
+                std::lock_guard<std::mutex> lk(g_hotkeyMutex);
+                g_hotkeys.push_back({ id, HotkeyAction::Count, this });
+                Logger::Info(std::string("hotkey ") + label + " registered (special)");
+            } else {
+                Logger::Warn(std::string("hotkey ") + label + " FAILED (special)");
+            }
+        };
+        // Cmd+Option+/ → toggle the hotkey hints panel
+        registerSpecial(MacOverlayWindowImpl::kHkToggleHints,
+                        cmdKey | optionKey, kVK_ANSI_Slash, "Cmd+Option+/ (hints)");
+        // Cmd+Option+, → re-open welcome / settings dialog
+        registerSpecial(MacOverlayWindowImpl::kHkOpenSettings,
+                        cmdKey | optionKey, kVK_ANSI_Comma, "Cmd+Option+, (settings)");
+        // Cmd+Option+I → about dialog
+        registerSpecial(MacOverlayWindowImpl::kHkShowAbout,
+                        cmdKey | optionKey, kVK_ANSI_I, "Cmd+Option+I (about)");
+
+        // Hand the config to the renderer so it can render real hotkey strings
+        // in the status bar / empty hint / hints panel.
+        ChatViewSetConfig(m_impl->chatView, &m_impl->config);
+
+        // Poll audio energy 6×/sec so the level dot in the status bar reflects
+        // real-time meeting volume. NSTimer runs on the main run loop, which is
+        // exactly where the renderer wants to be updated.
+        __block MacOverlayWindowImpl* implPtr = m_impl.get();
+        m_impl->audioLevelTimer = [NSTimer scheduledTimerWithTimeInterval:0.17
+            repeats:YES
+            block:^(NSTimer*) {
+                float lvl = implPtr->audio ? implPtr->audio->RecentEnergy(1) : 0.0f;
+                ChatViewSetAudioLevel(implPtr->chatView, lvl);
+            }];
 
         // 5) Update check (non-blocking)
         if (!m_impl->config.update_check_url.empty()) {
@@ -371,6 +462,9 @@ static void DispatchAskAsync(MacOverlayWindowImpl* impl,
                               const std::string& wavBase64)
 {
     impl->inflightCalls.fetch_add(1);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ChatViewSetThinking(impl->chatView, YES);
+    });
     impl->AddMessage(userMessage, true);
 
     // Add an empty bot bubble so streaming has something to append into.
@@ -397,8 +491,13 @@ static void DispatchAskAsync(MacOverlayWindowImpl* impl,
                     impl->AppendToLastBot(chunk);
                 }
                 if (isFinal) {
-                    impl->inflightCalls.fetch_sub(1);
+                    int remaining = impl->inflightCalls.fetch_sub(1) - 1;
                     impl->Finalize();
+                    if (remaining <= 0) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            ChatViewSetThinking(impl->chatView, NO);
+                        });
+                    }
                 }
             });
     }).detach();
@@ -503,6 +602,10 @@ void MacOverlayWindow::ToggleSelectMode() {
 
 void MacOverlayWindow::ExitApp() {
     Logger::Info("exit requested");
+    if (m_impl->audioLevelTimer) {
+        [m_impl->audioLevelTimer invalidate];
+        m_impl->audioLevelTimer = nil;
+    }
     if (m_impl->audio) m_impl->audio->Stop();
     for (auto ref : m_impl->hotkeys) UnregisterEventHotKey(ref);
     m_impl->hotkeys.clear();
@@ -515,4 +618,95 @@ void MacOverlayWindow::ExitApp() {
 
 void MacOverlayWindow::ScrollChat(int delta) {
     ChatViewScroll(m_impl->chatView, delta);
+}
+
+void MacOverlayWindow::ToggleHotkeyHints() {
+    ChatViewToggleHints(m_impl->chatView);
+}
+
+void MacOverlayWindow::OpenRuntimeSettings() {
+    // Unregister current Carbon hotkeys before showing the modal so the user
+    // can rebind without conflicts firing.
+    for (auto ref : m_impl->hotkeys) UnregisterEventHotKey(ref);
+    m_impl->hotkeys.clear();
+    {
+        std::lock_guard<std::mutex> lk(g_hotkeyMutex);
+        g_hotkeys.clear();
+    }
+
+    // Run modal — config dialog mutates m_impl->config in place.
+    @autoreleasepool {
+        std::vector<ModelInfo> models = ConfigLoader::LoadModels("models_list.txt");
+        if (MacConfigDialog::Show(m_impl->config, models)) {
+            ConfigLoader::SaveConfig("llm_config.txt", m_impl->config);
+            Logger::Info("settings re-applied via runtime dialog");
+        }
+    }
+
+    // Re-apply theme + hand the (possibly new) config back to the renderer.
+    ChatViewSetTheme(m_impl->chatView, m_impl->config.theme.c_str());
+    ChatViewSetConfig(m_impl->chatView, &m_impl->config);
+
+    // Restart audio capture if the mic checkbox flipped.
+    if (m_impl->audio) {
+        m_impl->audio->Stop();
+        m_impl->audio->Start(m_impl->config.capture_mic,
+                             m_impl->config.audio_device_id,
+                             m_impl->config.mic_device_id);
+    }
+
+    // Re-register hotkeys with the new bindings.
+    int registered = 0, failed = 0;
+    for (int i = 0; i < (int)HotkeyAction::Count; ++i) {
+        HotkeyBinding b = m_impl->config.hotkeys.bindings[i];
+        if (b.empty()) continue;
+        UInt32 mods = ConvertModifiers(b.modifiers);
+        UInt32 kc   = ConvertVk(b.vk);
+        if (kc == 0xFFFF) { failed++; continue; }
+        EventHotKeyID hkid = { 'OVRL', (UInt32)(i + 1) };
+        EventHotKeyRef ref = nullptr;
+        if (RegisterEventHotKey(kc, mods, hkid, GetApplicationEventTarget(),
+                                0, &ref) == noErr) {
+            m_impl->hotkeys.push_back(ref);
+            std::lock_guard<std::mutex> lk(g_hotkeyMutex);
+            g_hotkeys.push_back({ (UInt32)(i + 1), (HotkeyAction)i, this });
+            registered++;
+        } else {
+            failed++;
+        }
+    }
+
+    // Re-register the special hardcoded hotkeys too.
+    auto reSpecial = [&](UInt32 id, UInt32 mods, UInt32 kc) {
+        EventHotKeyID hkid = { 'OVRL', id };
+        EventHotKeyRef ref = nullptr;
+        if (RegisterEventHotKey(kc, mods, hkid, GetApplicationEventTarget(),
+                                0, &ref) == noErr) {
+            m_impl->hotkeys.push_back(ref);
+            std::lock_guard<std::mutex> lk(g_hotkeyMutex);
+            g_hotkeys.push_back({ id, HotkeyAction::Count, this });
+        }
+    };
+    reSpecial(MacOverlayWindowImpl::kHkToggleHints,  cmdKey | optionKey, kVK_ANSI_Slash);
+    reSpecial(MacOverlayWindowImpl::kHkOpenSettings, cmdKey | optionKey, kVK_ANSI_Comma);
+    reSpecial(MacOverlayWindowImpl::kHkShowAbout,    cmdKey | optionKey, kVK_ANSI_I);
+
+    Logger::Info("hotkeys re-registered: " + std::to_string(registered) +
+                 " ok, " + std::to_string(failed) + " failed");
+}
+
+void MacOverlayWindow::ShowAbout() {
+    @autoreleasepool {
+        NSAlert* a = [[NSAlert alloc] init];
+        [a setMessageText:@"Invisible AI Overlay"];
+        [a setInformativeText:
+            @"Version 2.5.0 (macOS)\n\n"
+            @"Live interview & study copilot. Captures meeting audio + "
+            @"screen + clipboard text, sends to your chosen LLM, streams "
+            @"the answer here. Invisible to screen recording.\n\n"
+            @"⌘⌥/ to view all hotkeys · ⌘⌥, to change settings · ⌘⌥X to exit\n\n"
+            @"github.com/Zer0skillman/Interview-Hack"];
+        [a addButtonWithTitle:@"OK"];
+        [a runModal];
+    }
 }
