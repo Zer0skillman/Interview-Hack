@@ -1,8 +1,8 @@
 # Invisible AI Overlay — Project Status & Roadmap
 
-**Current version:** 2.3.0
+**Current version:** 2.4.0
 
-Open work items live in section 5. Section 3 lists what currently works.
+Section 3 lists what currently works. Section 5 lists what still needs the user (not Claude).
 
 ---
 
@@ -24,13 +24,19 @@ Single executable, ~3.8 MB, pure C++ / Win32:
 
 | File | Responsibility |
 |---|---|
-| `main.cpp` | `WinMain`, GDI+ init, dialog flow |
-| `ConfigDialog.cpp/.h` | Welcome screen, provider picker, hotkey rebinder |
-| `ConfigLoader.cpp/.h` | Load/save `llm_config.txt`, provider registry, hotkey serialization |
-| `OverlayWindow.cpp/.h` | Win32 window, message loop, rendering, all hotkey handlers, polling timer |
-| `LLMClient.cpp/.h` | HTTPS streaming to Gemini / OpenAI-compat / Anthropic. SSE parsing. |
-| `AudioCapture.cpp/.h` | WASAPI loopback, ring buffer (60s @ 16 kHz mono), WAV+base64 encoding, RMS for VAD |
-| `build_release.ps1` | g++ build + dist packaging |
+| `main.cpp` | `WinMain`, GDI+ init, crash filter, dialog flow |
+| `ConfigDialog.cpp/.h` | Welcome screen, provider picker, hotkey rebinder, tooltips, session picker |
+| `ConfigLoader.cpp/.h` | Load/save `llm_config.txt`, provider registry, theme palette, hotkey serialization |
+| `OverlayWindow.cpp/.h` | Win32 window, message loop, hotkey handlers, polling timer, send paths, edit popup |
+| `Overlay_Rendering.cpp` | OnPaint + syntax/markdown/bracket colorizers (factored out for readability) |
+| `LLMClient.cpp/.h` | HTTPS streaming to Gemini / OpenAI-compat / Anthropic. SSE parsing. Merged classifier+answer path. |
+| `AudioCapture.cpp/.h` | WASAPI loopback + optional mic, ring buffer (60s @ 16 kHz mono), WAV+base64, RMS for VAD, device enumeration |
+| `Logger.cpp/.h` | File-based logging helper (`logs/app.log`) |
+| `Parsers.h` | Inline parser helpers (also consumed by tests.exe) |
+| `tests.cpp` | Standalone test runner — 27 checks across the parser helpers |
+| `app.rc` + `app.ico` | Embedded icon + version metadata (linked via windres) |
+| `build_release.ps1` | g++ build + dist packaging + tests.exe build |
+| `.github/workflows/build.yml` | GitHub Actions CI |
 
 ---
 
@@ -160,17 +166,17 @@ Rebinding UI in the welcome screen has a **"Reset to defaults"** button.
 
 ## 5. Open work items
 
-Real code tasks you can pick up. Sized so each fits in a focused session.
+Nothing actionable in code remains from the previous backlog — the seven items there shipped in this last wave.
 
-| Item | What it gets you | Effort |
-|---|---|---|
-| **Styled markdown rendering** (real bold/italic, not just stripping) | `**bold**` and `*italic*` render with bold/italic Segoe UI runs in prose. Needs manual word-wrap with mixed-font runs since `DrawText` doesn't handle that. | ~3 h |
-| **Per-message edit-and-resend** | Right-click (in select mode) a user bubble → edit text in an inline popup → resend, replacing the bot reply. Needs a small modal edit dialog + history-slicing. | ~3 h |
-| **Streaming auto-answer single-call merge** | Combine the classifier + answer into one streaming Gemini call. Parser splits TRANSCRIPT/ANSWER inline. Saves ~1s per auto-answer. | ~4 h |
-| **Unit tests for parsers** | Header-only test framework (doctest) wired into the build. Cover ExtractJsonStringField, DrainSSEBuffer, ColorizeBrackets, ParseSegments, BindingFromString. | ~1 d |
-| **Refactor `OverlayWindow.cpp`** | ~1500 lines today. Split into Rendering, Hotkeys, SendPaths, Persistence. Mechanical but reduces regression surface for future features. | ~3 h |
-| **Multiple conversations UI** | Today sessions exist as a single text field. Real picker would be a session-list panel + new/rename/delete buttons. | ~1 d |
-| **Full syntax highlighting** | Per-language lexers (currently pan-language keyword set). Detect language from the code fence label and use the right keyword/operator set. | ~1 d |
+What needs you (outside the code):
+
+- **Real-world smoke test** the build (`project_app\overlay.exe`) in an actual mock interview. The harder-to-test paths (Anthropic vision, OpenAI vision, edit-and-resend round trip, audio device switching) need a human + API keys.
+- **Rotate the leaked Gemini API key** at <https://aistudio.google.com/app/apikey> (in-app warning is there).
+- **README screenshots / demo GIF.** I can't run the app to capture them.
+- **Publish on a GitHub repo** to make the CI workflow at `.github/workflows/build.yml` actually fire.
+- **(Optional) Set `update_check_url`** in `llm_config.txt` to point at the published Releases endpoint once you publish.
+
+If you find concrete pain points during the smoke test, those become the next backlog.
 
 ---
 

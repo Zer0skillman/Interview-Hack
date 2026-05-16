@@ -8,6 +8,11 @@ project_app/
 /build
 *.spec
 __pycache__/
+overlay.exe
+tests.exe
+*.res.o
+*.o
+logs/
 
 # Python
 venv/

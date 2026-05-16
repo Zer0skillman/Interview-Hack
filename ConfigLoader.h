@@ -60,11 +60,11 @@ struct LLMConfig {
     // Auto-answer extras
     bool sound_on_auto = false;   // MessageBeep when auto-answer fires
 
-    // Optional update check (empty = disabled). If set, on launch we fetch this
-    // URL and look for a "tag_name" field; if it parses to a version higher than
-    // ours, we show a one-time notice in the transcript bar.
-    // Example: https://api.github.com/repos/USER/REPO/releases/latest
-    std::string update_check_url;
+    // Optional update check. On launch we fetch this URL and look for a
+    // "tag_name" field; if it parses to a version higher than ours, we show a
+    // one-time notice in the transcript bar. Default points at the canonical
+    // upstream repo; users of forks can override or clear it.
+    std::string update_check_url = "https://api.github.com/repos/Zer0skillman/Interview-Hack/releases/latest";
 };
 
 struct ModelInfo {
