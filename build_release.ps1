@@ -1,4 +1,4 @@
-# Master Build Script for AI Overlay
+# Master Build Script for AI Overlay (single-process C++)
 
 $ErrorActionPreference = "Stop"
 
@@ -6,33 +6,27 @@ Write-Host "==================================" -ForegroundColor Cyan
 Write-Host "   BUILDING AI OVERLAY RELEASE" -ForegroundColor Cyan
 Write-Host "==================================" -ForegroundColor Cyan
 
-# 1. Build Python Backend
-Write-Host "`n[1/3] Building Python Backend..." -ForegroundColor Yellow
-if (Test-Path "python_backend") {
-    Push-Location "python_backend"
-    try {
-        # Call the backend build script (which installs reqs and runs pyinstaller)
-        # We assume it creates ../app/ai_backend.exe as currently programmed
-        & .\build.ps1
-    } catch {
-        Write-Error "Failed to build Python Backend. Check errors above."
-        Pop-Location
-        exit 1
-    }
-    Pop-Location
-} else {
-    Write-Error "Directory 'python_backend' not found!"
-    exit 1
-}
-
-# 2. Build C++ Frontend
-Write-Host "`n[2/3] Building C++ Frontend..." -ForegroundColor Yellow
+# 1. Build C++ Frontend
+Write-Host "`n[1/2] Building C++ Frontend..." -ForegroundColor Yellow
 
 # Ensure g++ is in PATH (common MSYS2 location)
 $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
 
 $cppOutput = "overlay.exe"
-$gppCommand = "g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32"
+
+# Compile the Win32 resource (icon + version info) into an object file
+if (Test-Path "app.rc") {
+    Write-Host "Compiling app.rc (icon + version info)..."
+    & windres app.rc -O coff -o app.res.o
+    if (-not (Test-Path "app.res.o")) {
+        Write-Error "windres failed to produce app.res.o"
+        exit 1
+    }
+}
+
+$resObj = ""
+if (Test-Path "app.res.o") { $resObj = "app.res.o" }
+$gppCommand = "g++ main.cpp OverlayWindow.cpp ConfigLoader.cpp LLMClient.cpp ConfigDialog.cpp AudioCapture.cpp $resObj -o $cppOutput -mwindows -static -DUNICODE -D_UNICODE -lwinhttp -lcomctl32 -lgdiplus -lcrypt32 -lole32 -lshell32"
 
 Write-Host "Running: $gppCommand"
 Invoke-Expression $gppCommand
@@ -42,45 +36,40 @@ if (-not (Test-Path $cppOutput)) {
     exit 1
 }
 
-# 3. Create Distribution Folder 'project_app'
-Write-Host "`n[3/3] Packaging Relase to 'project_app'..." -ForegroundColor Yellow
+# 2. Package — write into project_app/ without nuking the directory, so a
+# transient Defender lock on the previous overlay.exe doesn't kill the build.
+Write-Host "`n[2/2] Packaging Release to 'project_app'..." -ForegroundColor Yellow
 $distDir = "project_app"
-
-# Clean old dist
-if (Test-Path $distDir) {
-    Remove-Item $distDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $distDir | Out-Null
-
-# Move/Copy Files
-# A. Overlay Executable
-Move-Item -Path $cppOutput -Destination "$distDir\"
-
-# B. AI Backend Executable (Created by python_backend/build.ps1 in 'app' folder)
-if (Test-Path "app/ai_backend.exe") {
-    Move-Item -Path "app/ai_backend.exe" -Destination "$distDir\"
-    Remove-Item "app" -Recurse -Force # Cleanup temporary build folder
-} elseif (Test-Path "python_backend/dist/ai_backend.exe") {
-    # Fallback if build.ps1 didn't move it
-    Copy-Item "python_backend/dist/ai_backend.exe" -Destination "$distDir\"
-} else {
-    Write-Warning "Could not find ai_backend.exe! The app needs this to function."
+if (-not (Test-Path $distDir)) {
+    New-Item -ItemType Directory -Path $distDir | Out-Null
 }
 
-# C. Supporting Files
+# Retry overwrite a few times — Defender briefly holds a handle on freshly-built exes.
+$attempt = 0
+$ok = $false
+while ($attempt -lt 5 -and -not $ok) {
+    try {
+        Move-Item -Path $cppOutput -Destination "$distDir\overlay.exe" -Force
+        $ok = $true
+    } catch {
+        $attempt++
+        Start-Sleep -Milliseconds 600
+    }
+}
+if (-not $ok) {
+    Write-Error "Could not move $cppOutput into $distDir (file locked). Try closing any running overlay.exe."
+    exit 1
+}
+
 if (Test-Path "models_list.txt") {
-    Copy-Item "models_list.txt" -Destination "$distDir\"
+    Copy-Item "models_list.txt" -Destination "$distDir\" -Force
 }
 if (Test-Path "README.md") {
-    Copy-Item "README.md" -Destination "$distDir\"
+    Copy-Item "README.md" -Destination "$distDir\" -Force
 }
-
-# Cleanup
-# Remove config from dist if it accidentally got copied? No, we only copied specific files.
-# We explicitly desire a fresh install (no llm_config.txt)
 
 Write-Host "`n==================================" -ForegroundColor Green
 Write-Host "   BUILD SUCCESSFUL" -ForegroundColor Green
 Write-Host "==================================" -ForegroundColor Green
 Write-Host "Output Folder: $PWD\$distDir"
-Write-Host "Run '$distDir\overlay.exe' to package or test."
+Write-Host "Run '$distDir\overlay.exe' to test."

@@ -1,89 +1,68 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include <cstdio>
 #include "OverlayWindow.h"
-
 #include "ConfigLoader.h"
 #include "ConfigDialog.h"
 
 #include <commctrl.h>
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "gdiplus.h")
 
-// Global Process Info for Backend
-PROCESS_INFORMATION g_piBackend = { 0 };
-
-std::wstring Utf8ToWide(const std::string& str) {
-    if (str.empty()) return std::wstring();
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-}
-
-void StartBackend(const LLMConfig& config) {
-    // 1. Set Env Vars for the Child Process (Inherited)
-    SetEnvironmentVariable(L"AI_PROVIDER", Utf8ToWide(config.provider).c_str());
-    SetEnvironmentVariable(L"AI_MODEL", Utf8ToWide(config.model).c_str());
-    SetEnvironmentVariable(L"AI_API_KEY", Utf8ToWide(config.api_key).c_str());
-    SetEnvironmentVariable(L"HOST", L"127.0.0.1");
-    SetEnvironmentVariable(L"PORT", L"8000");
-
-    // 2. Launch ai_backend.exe
-    STARTUPINFO si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // Hide console
-
-    ZeroMemory(&g_piBackend, sizeof(g_piBackend));
-
-    // Assume ai_backend.exe is in the same folder
-    wchar_t cmd[] = L"ai_backend.exe"; 
-    
-    if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &g_piBackend)) {
-        // Only warn, don't crash. Maybe user hasn't built it yet or wants to run it manually.
-        // MessageBox(NULL, L"Could not start ai_backend.exe. Please ensure it is in the same folder.", L"Warning", MB_ICONWARNING);
-        OutputDebugString(L"Failed to start backend process.\n");
-    } else {
-         // Wait a moment for backend to spin up
-        Sleep(2000);
+// Unhandled-exception filter — writes a brief crash record so the user can
+// report the failure mode. We don't dump symbols (no dbghelp dep) — just the
+// exception code and faulting address.
+static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
+{
+    CreateDirectoryW(L"logs", NULL);
+    HANDLE h = CreateFileW(L"logs\\crash.txt", GENERIC_WRITE, 0, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        char buf[512];
+        int n = std::snprintf(buf, sizeof(buf),
+            "Crash at %04d-%02d-%02d %02d:%02d:%02d\n"
+            "Exception code: 0x%08lX\n"
+            "Faulting address: %p\n"
+            "Version: 2.1.0\n",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+            (unsigned long)ep->ExceptionRecord->ExceptionCode,
+            ep->ExceptionRecord->ExceptionAddress);
+        DWORD wrote;
+        WriteFile(h, buf, (DWORD)n, &wrote, NULL);
+        CloseHandle(h);
     }
-}
-
-void StopBackend() {
-    if (g_piBackend.hProcess) {
-        TerminateProcess(g_piBackend.hProcess, 0);
-        CloseHandle(g_piBackend.hProcess);
-        CloseHandle(g_piBackend.hThread);
-        ZeroMemory(&g_piBackend, sizeof(g_piBackend));
-    }
+    return EXCEPTION_EXECUTE_HANDLER;
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    // Initialize Common Controls
+    SetUnhandledExceptionFilter(CrashFilter);
+
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icex);
 
-    // 1. Load Data
+    // GDI+ is used to encode screenshots as PNG for the multimodal LLM call.
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
     LLMConfig config = ConfigLoader::LoadConfig("llm_config.txt");
     std::vector<ModelInfo> models = ConfigLoader::LoadModels("models_list.txt");
 
-    // 2. Show Setup Dialog
     if (!ConfigDialog::Show(hInstance, config, models)) {
-        return 0; // Cancelled
+        Gdiplus::GdiplusShutdown(gdiplusToken);
+        return 0;
     }
 
-    // 3. Save Selection
     ConfigLoader::SaveConfig("llm_config.txt", config);
 
-    // 4. Start Backend
-    StartBackend(config);
-
-    // 5. Start Overlay
     OverlayWindow overlay;
-    overlay.SetConfig(config); 
+    overlay.SetConfig(config);
 
     if (overlay.Initialize(hInstance))
     {
@@ -94,9 +73,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         MessageBox(NULL, L"Failed to initialize overlay window.", L"Error", MB_ICONERROR);
     }
 
-    // 6. Cleanup
-    StopBackend();
-
+    Gdiplus::GdiplusShutdown(gdiplusToken);
     return 0;
 }
-
