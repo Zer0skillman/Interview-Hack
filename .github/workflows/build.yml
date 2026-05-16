@@ -3,9 +3,13 @@ name: Build
 on:
   push:
     branches: [main, memory-based-chat]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write  # needed for creating releases on tag pushes
 
 jobs:
   build:
@@ -15,8 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # MinGW-w64 g++ is pre-installed on windows-latest runners (C:\msys64).
-      # We extend PATH to make sure the build script finds it.
       - name: Verify g++ + windres
         shell: pwsh
         run: |
@@ -30,9 +32,34 @@ jobs:
           $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
           .\build_release.ps1
 
-      - name: Upload artifact
+      - name: Run tests
+        shell: pwsh
+        run: |
+          if (Test-Path tests.exe) { .\tests.exe } else { Write-Warning "tests.exe missing - skipping" }
+
+      - name: Upload artifact (every build)
         uses: actions/upload-artifact@v4
         with:
           name: overlay-${{ github.sha }}
           path: project_app/
           retention-days: 14
+
+      # ---- Release path: only runs when pushing a v* tag ----
+
+      - name: Package release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $name = "Interview-Hack-${{ github.ref_name }}.zip"
+          Compress-Archive -Path project_app\* -DestinationPath $name -Force
+          Get-Item $name | Select-Object Name, Length
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Interview-Hack-${{ github.ref_name }}.zip
+          generate_release_notes: true
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
