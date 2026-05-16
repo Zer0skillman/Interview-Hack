@@ -44,6 +44,7 @@ set(COMMON_HEADERS
     Logger.h
     Updater.h
     Parsers.h
+    IAudioCapture.h
 )
 
 # ---------------------------------------------------------------------------

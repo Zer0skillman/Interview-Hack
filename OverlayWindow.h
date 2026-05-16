@@ -4,7 +4,8 @@
 #include <vector>
 #include <atomic>
 #include "ConfigLoader.h"
-#include "AudioCapture.h"
+#include "IAudioCapture.h"
+#include <memory>
 
 // Custom message for when a full (non-streaming) LLM response is ready
 #define WM_LLM_RESPONSE (WM_APP + 1)
@@ -90,7 +91,7 @@ private:
     HINSTANCE m_hInstance;
     std::vector<ChatMessage> m_messages;
     LLMConfig m_config;
-    AudioCapture m_audio;
+    std::unique_ptr<IAudioCapture> m_audio;
 
     // Scrolling
     int m_scrollOffset;

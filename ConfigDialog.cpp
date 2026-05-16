@@ -1,5 +1,5 @@
 #include "ConfigDialog.h"
-#include "AudioCapture.h"
+#include "IAudioCapture.h"
 #include <commctrl.h>
 #include <dwmapi.h>
 
@@ -532,7 +532,7 @@ void ConfigDialog::InitializeControls(HWND hwnd) {
         WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
         rbX_lbl, rbY, 240, 200, hwnd, (HMENU)ID_COMBO_DEV_OUT, NULL, NULL);
     SendMessage(hOutDev, WM_SETFONT, (WPARAM)hSmall, TRUE);
-    s_outDevices = AudioCapture::EnumerateDevices(true);
+    s_outDevices = EnumerateAudioDevices(true);
     SendMessageW(hOutDev, CB_ADDSTRING, 0, (LPARAM)L"(default output device)");
     int outSel = 0;
     for (size_t i = 0; i < s_outDevices.size(); ++i) {
@@ -553,7 +553,7 @@ void ConfigDialog::InitializeControls(HWND hwnd) {
         WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
         rbX_lbl, rbY, 240, 200, hwnd, (HMENU)ID_COMBO_DEV_MIC, NULL, NULL);
     SendMessage(hMicDev, WM_SETFONT, (WPARAM)hSmall, TRUE);
-    s_micDevices = AudioCapture::EnumerateDevices(false);
+    s_micDevices = EnumerateAudioDevices(false);
     SendMessageW(hMicDev, CB_ADDSTRING, 0, (LPARAM)L"(default mic)");
     int micSel = 0;
     for (size_t i = 0; i < s_micDevices.size(); ++i) {

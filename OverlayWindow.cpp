@@ -10,6 +10,7 @@
 #include <shellapi.h>  // ShellExecuteW
 #include <winhttp.h>   // for the update-check GET
 #include <dwmapi.h>    // Win11 dark title bar + rounded corners
+#include <thread>
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -255,7 +256,8 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance)
 
     // Start background audio capture. Loopback (system audio) always; optionally
     // mix in mic per config. Device IDs empty -> default endpoints.
-    m_audio.Start(m_config.capture_mic, m_config.audio_device_id, m_config.mic_device_id);
+    m_audio = CreateAudioCapture();
+    m_audio->Start(m_config.capture_mic, m_config.audio_device_id, m_config.mic_device_id);
 
     // Load prior conversation if requested
     if (m_config.restore_session) {
@@ -809,7 +811,7 @@ void OverlayWindow::CopyLastAnswer()
 void OverlayWindow::FirePoll()
 {
     // Always update audio level for the bar dot — cheap, no API call
-    m_audioLevel = m_audio.RecentEnergy(2);
+    m_audioLevel = m_audio->RecentEnergy(2);
 
     // No polling unless auto mode is on. Saves API calls when F9 is off.
     if (!m_autoMode) {
@@ -852,7 +854,7 @@ void OverlayWindow::FirePoll()
         return;
     }
 
-    std::string wav = m_audio.SnapshotAsBase64Wav(8);
+    std::string wav = m_audio->SnapshotAsBase64Wav(8);
     if (wav.empty()) {
         m_pollInFlight.store(false);
         return;
@@ -998,7 +1000,7 @@ void OverlayWindow::CaptureScreenOnly()
 void OverlayWindow::CaptureAudioOnly()
 {
     ShowWindow(m_hwnd, SW_SHOW);
-    std::string wav = m_audio.SnapshotAsBase64Wav(30);
+    std::string wav = m_audio->SnapshotAsBase64Wav(30);
     if (wav.empty()) {
         ChatMessage bot; bot.isUser = false;
         bot.text = L"No audio captured yet. Play audio through your speakers and retry.";
@@ -1400,8 +1402,8 @@ void OverlayWindow::OpenRuntimeSettings()
 
     // If mic toggle OR any device ID changed, restart the audio thread
     // (we don't track old device IDs here; just restart if any audio setting could have changed)
-    m_audio.Stop();
-    m_audio.Start(m_config.capture_mic, m_config.audio_device_id, m_config.mic_device_id);
+    m_audio->Stop();
+    m_audio->Start(m_config.capture_mic, m_config.audio_device_id, m_config.mic_device_id);
     (void)oldMic;
 
     // Reset transcript bar so old text doesn't linger from a stale provider

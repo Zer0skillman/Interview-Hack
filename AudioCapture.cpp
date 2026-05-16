@@ -109,15 +109,15 @@ std::string Base64Encode(const uint8_t* data, size_t len) {
 // AudioCapture
 // -----------------------------------------------------------------------------
 
-AudioCapture::AudioCapture() {
+WindowsAudioCapture::WindowsAudioCapture() {
     m_ring.assign((size_t)kTargetRate * kMaxSeconds, 0.0f);
 }
 
-AudioCapture::~AudioCapture() {
+WindowsAudioCapture::~WindowsAudioCapture() {
     Stop();
 }
 
-bool AudioCapture::Start(bool withMic,
+bool WindowsAudioCapture::Start(bool withMic,
                          const std::string& loopbackDeviceId,
                          const std::string& micDeviceId) {
     if (m_running.load()) return true;
@@ -125,9 +125,9 @@ bool AudioCapture::Start(bool withMic,
     m_loopbackDeviceId = loopbackDeviceId;
     m_micDeviceId = micDeviceId;
     m_running.store(true);
-    m_thread = std::thread(&AudioCapture::CaptureLoop, this);
+    m_thread = std::thread(&WindowsAudioCapture::CaptureLoop, this);
     if (m_withMic) {
-        m_micThread = std::thread(&AudioCapture::MicCaptureLoop, this);
+        m_micThread = std::thread(&WindowsAudioCapture::MicCaptureLoop, this);
     }
     return true;
 }
@@ -150,7 +150,7 @@ static std::string WToUtf8(LPCWSTR w) {
     return s;
 }
 
-std::vector<AudioDeviceInfo> AudioCapture::EnumerateDevices(bool flowIsRender) {
+std::vector<AudioDeviceInfo> EnumerateAudioDevices(bool flowIsRender) {
     std::vector<AudioDeviceInfo> out;
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     bool comInited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
@@ -198,13 +198,13 @@ std::vector<AudioDeviceInfo> AudioCapture::EnumerateDevices(bool flowIsRender) {
     return out;
 }
 
-void AudioCapture::Stop() {
+void WindowsAudioCapture::Stop() {
     m_running.store(false);
     if (m_thread.joinable()) m_thread.join();
     if (m_micThread.joinable()) m_micThread.join();
 }
 
-void AudioCapture::CaptureLoop() {
+void WindowsAudioCapture::CaptureLoop() {
     // COM is initialized per-thread for the audio worker.
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     bool comInited = SUCCEEDED(hr);
@@ -334,7 +334,7 @@ void AudioCapture::CaptureLoop() {
 // Mic capture: separate WASAPI stream from the default capture endpoint, samples
 // converted to mono 16 kHz and ADDITIVELY mixed into the ring at the current
 // m_writePos. Imperfect timing alignment but adequate for ASR.
-void AudioCapture::MicCaptureLoop() {
+void WindowsAudioCapture::MicCaptureLoop() {
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     bool comInited = SUCCEEDED(hr);
 
@@ -432,7 +432,7 @@ void AudioCapture::MicCaptureLoop() {
     if (comInited)  CoUninitialize();
 }
 
-float AudioCapture::RecentEnergy(int seconds) {
+float WindowsAudioCapture::RecentEnergy(int seconds) {
     if (seconds <= 0) return 0.0f;
     std::lock_guard<std::mutex> lk(m_mutex);
     const size_t cap  = m_ring.size();
@@ -450,7 +450,7 @@ float AudioCapture::RecentEnergy(int seconds) {
     return (float)std::min(rms, 1.0);
 }
 
-std::string AudioCapture::SnapshotAsBase64Wav(int seconds) {
+std::string WindowsAudioCapture::SnapshotAsBase64Wav(int seconds) {
     if (seconds <= 0) return std::string();
     if (seconds > kMaxSeconds) seconds = kMaxSeconds;
 
@@ -512,3 +512,9 @@ std::string AudioCapture::SnapshotAsBase64Wav(int seconds) {
 
     return Base64Encode(wav.data(), wav.size());
 }
+
+// Factory — returns the platform impl. On Windows that's WindowsAudioCapture.
+std::unique_ptr<IAudioCapture> CreateAudioCapture() {
+    return std::make_unique<WindowsAudioCapture>();
+}
+
