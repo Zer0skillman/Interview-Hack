@@ -365,7 +365,7 @@ static NSString* WideToNS(const std::wstring& w) {
     [@"Hotkeys" drawAtPoint:NSMakePoint(panel.origin.x + 16, panel.origin.y + 14)
               withAttributes:titleAttrs];
 
-    [@"Press ⌘⌥/ to close · ⌘⌥, to re-open settings" drawAtPoint:
+    [@"Press F2 (or ⌘⌥/) to close · ⌘⌥, to re-open settings · F1 for About" drawAtPoint:
         NSMakePoint(panel.origin.x + 16, panel.origin.y + 38)
                                                   withAttributes:@{
         NSFontAttributeName: [NSFont systemFontOfSize:11],

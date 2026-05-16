@@ -90,8 +90,8 @@ static unsigned int EventModsToWin(NSEventModifierFlags f) {
     NSWindow* window;
     NSPopUpButton* providerBtn;
     NSPopUpButton* modelBtn;
-    NSSecureTextField* apiKeyField;
-    NSSecureTextField* fallbackField;
+    NSTextField* apiKeyField;       // plain field so Cmd+V paste works
+    NSTextField* fallbackField;
     NSTextField* baseUrlField;
     NSTextField* baseUrlLabel;
     NSButton* micCheckbox;
@@ -250,6 +250,22 @@ static unsigned int EventModsToWin(NSEventModifierFlags f) {
 
 - (void)startPressed:(id)sender {
     (void)sender;
+
+    // Block "Start" if the API key field is blank or whitespace-only — the
+    // overlay can't reach any LLM without one, and a silent dialog dismiss
+    // followed by an "API key missing" error in the overlay is worse than
+    // catching it here.
+    NSString* keyRaw = [apiKeyField stringValue] ?: @"";
+    NSString* keyTrim = [keyRaw stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (keyTrim.length == 0) {
+        [self setStatus:@"API key is required — paste your provider key above."
+                  color:[NSColor systemRedColor]];
+        [[apiKeyField window] makeFirstResponder:apiKeyField];
+        NSBeep();
+        return;
+    }
+
     accepted = YES;
 
     config->provider = self.currentProviderId;
@@ -260,7 +276,7 @@ static unsigned int EventModsToWin(NSEventModifierFlags f) {
         if (dash != std::string::npos) m = m.substr(0, dash);
         config->model = m;
     }
-    config->api_key = [[apiKeyField stringValue] UTF8String];
+    config->api_key = [keyTrim UTF8String];
     config->gemini_fallback_key = [[fallbackField stringValue] UTF8String];
     if (config->provider == "custom") {
         config->base_url = [[baseUrlField stringValue] UTF8String];
@@ -386,11 +402,15 @@ bool Show(LLMConfig& config, const std::vector<ModelInfo>& models) {
         y -= 38;
 
         [root addSubview:MakeLabel(@"API Key", NSMakeRect(LCX, y, 80, 18), 12)];
-        ctrl->apiKeyField = [[NSSecureTextField alloc]
+        // Plain NSTextField (not NSSecureTextField) — paste via Cmd+V or
+        // right-click works without quirks, and the user can visually confirm
+        // they pasted the right thing.
+        ctrl->apiKeyField = [[NSTextField alloc]
             initWithFrame:NSMakeRect(LCX + 90, y - 4, LCW - 90, 24)];
         [ctrl->apiKeyField setStringValue:
             [NSString stringWithUTF8String:config.api_key.c_str()]];
         [ctrl->apiKeyField setPlaceholderString:@"Paste your API key"];
+        [[ctrl->apiKeyField cell] setUsesSingleLineMode:YES];
         [root addSubview:ctrl->apiKeyField];
         y -= 38;
 
@@ -409,11 +429,12 @@ bool Show(LLMConfig& config, const std::vector<ModelInfo>& models) {
         y -= 38;
 
         [root addSubview:MakeLabel(@"Gemini fallback", NSMakeRect(LCX, y, 110, 18), 12)];
-        ctrl->fallbackField = [[NSSecureTextField alloc]
+        ctrl->fallbackField = [[NSTextField alloc]
             initWithFrame:NSMakeRect(LCX + 120, y - 4, LCW - 120, 24)];
         [ctrl->fallbackField setStringValue:
             [NSString stringWithUTF8String:config.gemini_fallback_key.c_str()]];
         [ctrl->fallbackField setPlaceholderString:@"Optional — Gemini key for audio"];
+        [[ctrl->fallbackField cell] setUsesSingleLineMode:YES];
         [root addSubview:ctrl->fallbackField];
         y -= 38;
 

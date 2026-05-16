@@ -147,6 +147,11 @@ public:
     static constexpr UInt32 kHkToggleHints  = 9001;
     static constexpr UInt32 kHkOpenSettings = 9002;
     static constexpr UInt32 kHkShowAbout    = 9003;
+    // Familiar-from-Windows F-key aliases: F1 = About, F2 = Hints. Users
+    // still need Fn+F1/F2 unless they've toggled "Use F1, F2, … as standard
+    // function keys" in System Settings → Keyboard.
+    static constexpr UInt32 kHkF1About      = 9004;
+    static constexpr UInt32 kHkF2Hints      = 9005;
 
     // Adds a new message in a thread-safe way and triggers a re-render on the
     // main thread.
@@ -251,7 +256,8 @@ static OSStatus HotkeyEventHandler(EventHandlerCallRef, EventRef event, void*) {
     if (!owner) return noErr;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (matchedId == MacOverlayWindowImpl::kHkToggleHints) {
+        if (matchedId == MacOverlayWindowImpl::kHkToggleHints
+            || matchedId == MacOverlayWindowImpl::kHkF2Hints) {
             owner->ToggleHotkeyHints();
             return;
         }
@@ -259,7 +265,8 @@ static OSStatus HotkeyEventHandler(EventHandlerCallRef, EventRef event, void*) {
             owner->OpenRuntimeSettings();
             return;
         }
-        if (matchedId == MacOverlayWindowImpl::kHkShowAbout) {
+        if (matchedId == MacOverlayWindowImpl::kHkShowAbout
+            || matchedId == MacOverlayWindowImpl::kHkF1About) {
             owner->ShowAbout();
             return;
         }
@@ -411,6 +418,13 @@ bool MacOverlayWindow::Initialize() {
         // Cmd+Option+I → about dialog
         registerSpecial(MacOverlayWindowImpl::kHkShowAbout,
                         cmdKey | optionKey, kVK_ANSI_I, "Cmd+Option+I (about)");
+        // F1 → about (familiar from Windows). On Mac, requires Fn+F1 unless
+        // the user enabled the "standard function keys" System Setting.
+        registerSpecial(MacOverlayWindowImpl::kHkF1About,
+                        0, kVK_F1, "F1 (about)");
+        // F2 → hotkey hints panel (also familiar from Windows).
+        registerSpecial(MacOverlayWindowImpl::kHkF2Hints,
+                        0, kVK_F2, "F2 (hints)");
 
         // Hand the config to the renderer so it can render real hotkey strings
         // in the status bar / empty hint / hints panel.
@@ -431,7 +445,7 @@ bool MacOverlayWindow::Initialize() {
         if (!m_impl->config.update_check_url.empty()) {
             Updater::CheckAndDownloadAsync(
                 m_impl->config.update_check_url,
-                L"2.5.1",
+                L"2.5.2",
                 [this](const Updater::Status& st) {
                     if (st.state == Updater::State::UpdateAvailable) {
                         NSString* s = [NSString stringWithUTF8String:
@@ -690,6 +704,8 @@ void MacOverlayWindow::OpenRuntimeSettings() {
     reSpecial(MacOverlayWindowImpl::kHkToggleHints,  cmdKey | optionKey, kVK_ANSI_Slash);
     reSpecial(MacOverlayWindowImpl::kHkOpenSettings, cmdKey | optionKey, kVK_ANSI_Comma);
     reSpecial(MacOverlayWindowImpl::kHkShowAbout,    cmdKey | optionKey, kVK_ANSI_I);
+    reSpecial(MacOverlayWindowImpl::kHkF1About,      0, kVK_F1);
+    reSpecial(MacOverlayWindowImpl::kHkF2Hints,      0, kVK_F2);
 
     Logger::Info("hotkeys re-registered: " + std::to_string(registered) +
                  " ok, " + std::to_string(failed) + " failed");
@@ -700,11 +716,12 @@ void MacOverlayWindow::ShowAbout() {
         NSAlert* a = [[NSAlert alloc] init];
         [a setMessageText:@"Invisible AI Overlay"];
         [a setInformativeText:
-            @"Version 2.5.1 (macOS)\n\n"
+            @"Version 2.5.2 (macOS)\n\n"
             @"Live interview & study copilot. Captures meeting audio + "
             @"screen + clipboard text, sends to your chosen LLM, streams "
             @"the answer here. Invisible to screen recording.\n\n"
-            @"⌘⌥/ to view all hotkeys · ⌘⌥, to change settings · ⌘⌥X to exit\n\n"
+            @"F1 (or ⌘⌥I) → this About · F2 (or ⌘⌥/) → hotkey hints\n"
+            @"⌘⌥, → settings · ⌘⌥X → exit\n\n"
             @"github.com/Zer0skillman/Interview-Hack"];
         [a addButtonWithTitle:@"OK"];
         [a runModal];

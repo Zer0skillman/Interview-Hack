@@ -1086,7 +1086,7 @@ static void DoUpdateCheck(HWND hwnd, std::string url) {
         MultiByteToWideChar(CP_UTF8, 0, pathPart.data(), (int)pathPart.size(), &path[0], n);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.5.1 UpdateCheck",
+    HINTERNET hSession = WinHttpOpen(L"AIOverlay/2.5.2 UpdateCheck",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
     WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
@@ -1153,7 +1153,7 @@ void OverlayWindow::CheckForUpdateAsync()
 
     // New flow: full updater (check → download → ready). Status updates go to
     // the transcript bar via WM_POLL_RESULT with empty questionText.
-    Updater::CheckAndDownloadAsync(m_config.update_check_url, L"2.5.1",
+    Updater::CheckAndDownloadAsync(m_config.update_check_url, L"2.5.2",
         [hwnd](const Updater::Status& st) {
             // Bridge to UI thread by reusing WM_POLL_RESULT (transcript-only update).
             std::wstring msg = st.message;
@@ -1215,7 +1215,7 @@ void OverlayWindow::ShowAbout()
 {
     MessageBoxW(m_hwnd,
         L"Invisible AI Overlay\n"
-        L"Version 2.5.1\n\n"
+        L"Version 2.5.2\n\n"
         L"Live interview & study copilot.\n"
         L"Captures system audio, screenshots, clipboard text.\n"
         L"Streams answers from Gemini / Claude / OpenAI / etc.\n\n"

@@ -16,7 +16,7 @@
 
 cmake_minimum_required(VERSION 3.16)
 project(InvisibleAIOverlay
-    VERSION 2.5.1
+    VERSION 2.5.2
     LANGUAGES CXX
     DESCRIPTION "Invisible AI Overlay — live interview & study copilot"
 )
